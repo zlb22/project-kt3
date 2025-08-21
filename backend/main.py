@@ -10,14 +10,24 @@ import os
 from datetime import datetime, timedelta
 from typing import Optional, List
 import uvicorn
+from motor.motor_asyncio import AsyncIOMotorClient
 
 # JWT Configuration
 SECRET_KEY = "your-secret-key-change-in-production"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
+# MongoDB Configuration
+MONGODB_URL = "mongodb://localhost:27017"
+DATABASE_NAME = "project-kt3"
+
 app = FastAPI(title="Educational Assessment API", version="2.0")
 security = HTTPBearer()
+
+# MongoDB client
+client = AsyncIOMotorClient(MONGODB_URL)
+db = client[DATABASE_NAME]
+users_collection = db.users
 
 # CORS middleware
 app.add_middleware(
@@ -53,20 +63,18 @@ class User(BaseModel):
 def make_hashed_password(password: str) -> str:
     return hashlib.sha256(str.encode(password)).hexdigest()
 
-def load_users():
-    try:
-        with open('users.json', 'r') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        default_users = {
-            "admin": make_hashed_password("1")
-        }
-        save_users(default_users)
-        return default_users
+# MongoDB user operations
+async def get_user_from_db(username: str):
+    """从MongoDB获取用户信息"""
+    user = await users_collection.find_one({"username": username})
+    return user
 
-def save_users(users_data):
-    with open('users.json', 'w') as f:
-        json.dump(users_data, f)
+async def update_user_password(username: str, new_password_hash: str):
+    """更新用户密码"""
+    await users_collection.update_one(
+        {"username": username},
+        {"$set": {"password": new_password_hash}}
+    )
 
 def check_password(password: str, hashed_password: str) -> bool:
     return make_hashed_password(password) == hashed_password
@@ -102,14 +110,15 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
 # Authentication endpoints
 @app.post("/api/auth/login", response_model=Token)
 async def login(user_data: UserLogin):
-    users = load_users()
-    if user_data.username not in users:
+    # 从MongoDB获取用户信息
+    user = await get_user_from_db(user_data.username)
+    if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password"
         )
     
-    if not check_password(user_data.password, users[user_data.username]):
+    if not check_password(user_data.password, user["password"]):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password"
@@ -130,15 +139,23 @@ async def change_password(
     password_data: PasswordChange,
     current_user: str = Depends(verify_token)
 ):
-    users = load_users()
-    if not check_password(password_data.old_password, users[current_user]):
+    # 从MongoDB获取当前用户信息
+    user = await get_user_from_db(current_user)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    if not check_password(password_data.old_password, user["password"]):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Incorrect old password"
         )
     
-    users[current_user] = make_hashed_password(password_data.new_password)
-    save_users(users)
+    # 更新密码到MongoDB
+    new_password_hash = make_hashed_password(password_data.new_password)
+    await update_user_password(current_user, new_password_hash)
     return {"message": "Password changed successfully"}
 
 # Health check
