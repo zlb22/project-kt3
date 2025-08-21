@@ -27,16 +27,25 @@ const Dashboard: React.FC = () => {
   const navigate = useNavigate();
 
   useEffect(() => {
-    const fetchTests = async () => {
-      try {
-        const response = await axios.get('/api/tests/available');
-        setTests(response.data.tests);
-      } catch (error) {
-        console.error('Failed to fetch tests:', error);
+    // 直接设置三个主要功能
+    const mainTests: TestOption[] = [
+      {
+        id: 'problem_solving',
+        name: '问题解决',
+        description: '创新问题解决能力测评'
+      },
+      {
+        id: 'interactive_discussion',
+        name: '互动讨论',
+        description: '互动讨论能力评估'
+      },
+      {
+        id: 'online_class',
+        name: '在线实验',
+        description: '在线实验学习平台'
       }
-    };
-
-    fetchTests();
+    ];
+    setTests(mainTests);
   }, []);
 
   const handleTestClick = (testId: string) => {
@@ -46,12 +55,6 @@ const Dashboard: React.FC = () => {
         break;
       case 'interactive_discussion':
         navigate('/interactive-discussion');
-        break;
-      case 'aut_test':
-        navigate('/aut-test');
-        break;
-      case 'emotion_test':
-        navigate('/emotion-test');
         break;
       case 'online_class':
         navigate('/online-class');

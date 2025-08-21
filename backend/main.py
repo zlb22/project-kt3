@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi import FastAPI, HTTPException, Depends, status, UploadFile, File, Form
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -165,6 +165,98 @@ async def get_test_details(test_id: str, current_user: str = Depends(verify_toke
     """Get details for a specific test"""
     # This would integrate with your existing test logic
     return {"test_id": test_id, "status": "available", "description": f"Details for {test_id}"}
+
+# 创建上传目录
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(f"{UPLOAD_DIR}/videos", exist_ok=True)
+
+@app.post("/api/upload/video")
+async def upload_video(
+    file: UploadFile = File(...),
+    video_type: str = Form(...),  # "camera" or "screen"
+    test_session_id: str = Form(...),
+    current_user: str = Depends(verify_token)
+):
+    """Upload recorded video files"""
+    try:
+        # 验证文件类型
+        if not file.content_type.startswith('video/'):
+            raise HTTPException(status_code=400, detail="只允许上传视频文件")
+        
+        # 生成文件名
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{current_user}_{test_session_id}_{video_type}_{timestamp}.webm"
+        file_path = os.path.join(UPLOAD_DIR, "videos", filename)
+        
+        # 保存文件
+        with open(file_path, "wb") as buffer:
+            content = await file.read()
+            buffer.write(content)
+        
+        # 记录上传信息
+        upload_info = {
+            "user": current_user,
+            "test_session_id": test_session_id,
+            "video_type": video_type,
+            "filename": filename,
+            "file_size": len(content),
+            "upload_time": datetime.now().isoformat(),
+            "file_path": file_path
+        }
+        
+        # 保存上传记录到JSON文件
+        uploads_log_file = os.path.join(UPLOAD_DIR, "uploads_log.json")
+        uploads_log = []
+        if os.path.exists(uploads_log_file):
+            with open(uploads_log_file, 'r', encoding='utf-8') as f:
+                uploads_log = json.load(f)
+        
+        uploads_log.append(upload_info)
+        
+        with open(uploads_log_file, 'w', encoding='utf-8') as f:
+            json.dump(uploads_log, f, ensure_ascii=False, indent=2)
+        
+        return {
+            "message": "视频上传成功",
+            "filename": filename,
+            "file_size": len(content),
+            "upload_time": upload_info["upload_time"]
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"文件上传失败: {str(e)}")
+
+@app.post("/api/tests/24point/submit")
+async def submit_24point_test(
+    test_data: dict,
+    current_user: str = Depends(verify_token)
+):
+    """Submit 24-point test results"""
+    try:
+        # 添加用户信息和时间戳
+        test_data["user"] = current_user
+        test_data["submit_time"] = datetime.now().isoformat()
+        
+        # 保存测试结果
+        results_dir = os.path.join(UPLOAD_DIR, "test_results")
+        os.makedirs(results_dir, exist_ok=True)
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        result_filename = f"{current_user}_24point_{timestamp}.json"
+        result_path = os.path.join(results_dir, result_filename)
+        
+        with open(result_path, 'w', encoding='utf-8') as f:
+            json.dump(test_data, f, ensure_ascii=False, indent=2)
+        
+        return {
+            "message": "测试结果提交成功",
+            "result_id": result_filename,
+            "submit_time": test_data["submit_time"]
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"测试结果提交失败: {str(e)}")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
