@@ -34,6 +34,8 @@ MINIO_URL = os.getenv("MINIO_URL", "http://localhost:9000")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY")
 MINIO_BUCKET_NAME = os.getenv("MINIO_BUCKET_NAME", "onlineclass")
+# 可选：限制允许的 bucket，逗号分隔；为空则不限制
+MINIO_ALLOWED_BUCKETS = [b.strip() for b in os.getenv("MINIO_ALLOWED_BUCKETS", "").split(",") if b.strip()]
 
 app = FastAPI(title="Educational Assessment API", version="2.0")
 security = HTTPBearer()
@@ -207,6 +209,7 @@ async def upload_video(
     file: UploadFile = File(...),
     video_type: str = Form(...),  # "camera" or "screen"（自动纠正拼写）
     test_session_id: str = Form(...),
+    bucket: Optional[str] = Form(None),
     current_user: str = Depends(verify_token)
 ):
     """Upload recorded video files to MinIO (bucket/<camera|screen>/filename)."""
@@ -236,6 +239,16 @@ async def upload_video(
         # 读取内容
         content = await file.read()
 
+        # 解析目标 bucket（表单优先，其次环境变量）
+        target_bucket = (bucket or MINIO_BUCKET_NAME).strip()
+        if not target_bucket:
+            raise HTTPException(status_code=400, detail="bucket 不能为空")
+        if "/" in target_bucket or "\\" in target_bucket:
+            raise HTTPException(status_code=400, detail="bucket 名称不合法")
+        # 可选白名单校验
+        if MINIO_ALLOWED_BUCKETS and target_bucket not in MINIO_ALLOWED_BUCKETS:
+            raise HTTPException(status_code=403, detail=f"不允许的 bucket: {target_bucket}")
+
         # 初始化 MinIO 客户端
         parsed = urlparse(MINIO_URL)
         if not parsed.scheme or not parsed.netloc:
@@ -246,15 +259,15 @@ async def upload_video(
 
         # 确保 bucket 存在
         try:
-            if not client.bucket_exists(MINIO_BUCKET_NAME):
-                client.make_bucket(MINIO_BUCKET_NAME)
+            if not client.bucket_exists(target_bucket):
+                client.make_bucket(target_bucket)
         except S3Error as e:
             raise HTTPException(status_code=500, detail=f"检查/创建 bucket 失败: {e}")
 
         # 上传到 MinIO
         try:
             client.put_object(
-                MINIO_BUCKET_NAME,
+                target_bucket,
                 object_name,
                 data=io.BytesIO(content),
                 length=len(content),
@@ -271,7 +284,7 @@ async def upload_video(
             "filename": filename,
             "file_size": len(content),
             "upload_time": datetime.now().isoformat(),
-            "file_path": f"minio://{MINIO_BUCKET_NAME}/{object_name}",
+            "file_path": f"minio://{target_bucket}/{object_name}",
         }
 
         # 保存上传记录到JSON文件

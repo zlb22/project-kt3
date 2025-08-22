@@ -670,6 +670,8 @@ const TwentyFourGame: React.FC<TwentyFourGameProps> = ({ onBack }) => {
   const uploadRecordedVideos = async () => {
     const testSessionId = new Date().getTime().toString(); // 使用时间戳作为会话ID
     const uploadPromises: Promise<any>[] = [];
+    // 按页面动态选择要上传的 bucket（可按路由/用户/业务动态决定）
+    const uploadBucket = 'onlineclass';
     
     console.log('开始上传视频，录制状态:', {
       isRecording,
@@ -703,6 +705,7 @@ const TwentyFourGame: React.FC<TwentyFourGameProps> = ({ onBack }) => {
         cameraFormData.append('file', cameraBlob, `camera_${testSessionId}.webm`);
         cameraFormData.append('video_type', 'camera');
         cameraFormData.append('test_session_id', testSessionId);
+        cameraFormData.append('bucket', uploadBucket);
         
         const cameraUpload = fetch('/api/upload/video', {
           method: 'POST',
@@ -722,6 +725,7 @@ const TwentyFourGame: React.FC<TwentyFourGameProps> = ({ onBack }) => {
         screenFormData.append('file', screenBlob, `screen_${testSessionId}.webm`);
         screenFormData.append('video_type', 'screen');
         screenFormData.append('test_session_id', testSessionId);
+        screenFormData.append('bucket', uploadBucket);
         
         const screenUpload = fetch('/api/upload/video', {
           method: 'POST',
