@@ -11,15 +11,29 @@ from datetime import datetime, timedelta
 from typing import Optional, List
 import uvicorn
 from motor.motor_asyncio import AsyncIOMotorClient
+from dotenv import load_dotenv
+from urllib.parse import urlparse
+from minio import Minio
+from minio.error import S3Error
+import io
+
+# Load environment variables
+load_dotenv()
 
 # JWT Configuration
-SECRET_KEY = "your-secret-key-change-in-production"
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
+ALGORITHM = os.getenv("ALGORITHM", "HS256")
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
 
 # MongoDB Configuration
-MONGODB_URL = "mongodb://localhost:27017"
-DATABASE_NAME = "project-kt3"
+MONGODB_URL = os.getenv("MONGODB_URL", "mongodb://localhost:27017")
+DATABASE_NAME = os.getenv("DATABASE_NAME", "project-kt3")
+
+# MinIO Configuration
+MINIO_URL = os.getenv("MINIO_URL", "http://localhost:9000")
+MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY")
+MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY")
+MINIO_BUCKET_NAME = os.getenv("MINIO_BUCKET_NAME", "onlineclass")
 
 app = FastAPI(title="Educational Assessment API", version="2.0")
 security = HTTPBearer()
@@ -32,7 +46,7 @@ users_collection = db.users
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # React dev server
+    allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:3000").split(","),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -184,63 +198,103 @@ async def get_test_details(test_id: str, current_user: str = Depends(verify_toke
     return {"test_id": test_id, "status": "available", "description": f"Details for {test_id}"}
 
 # 创建上传目录
-UPLOAD_DIR = "uploads"
+UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(f"{UPLOAD_DIR}/videos", exist_ok=True)
 
 @app.post("/api/upload/video")
 async def upload_video(
     file: UploadFile = File(...),
-    video_type: str = Form(...),  # "camera" or "screen"
+    video_type: str = Form(...),  # "camera" or "screen"（自动纠正拼写）
     test_session_id: str = Form(...),
     current_user: str = Depends(verify_token)
 ):
-    """Upload recorded video files"""
+    """Upload recorded video files to MinIO (bucket/<camera|screen>/filename)."""
     try:
         # 验证文件类型
         if not file.content_type.startswith('video/'):
             raise HTTPException(status_code=400, detail="只允许上传视频文件")
-        
-        # 生成文件名
+
+        # 规范化 video_type（纠正常见拼写）
+        vt = (video_type or "").strip().lower()
+        folder_map = {
+            "camera": "camera",
+            "cam": "camera",
+            "camaer": "camera",
+            "screen": "screen",
+            "scrren": "screen",
+        }
+        folder = folder_map.get(vt)
+        if folder is None:
+            raise HTTPException(status_code=400, detail="video_type 只能是 camera 或 screen")
+
+        # 生成文件名（使用纠正后的 folder 名称）
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{current_user}_{test_session_id}_{video_type}_{timestamp}.webm"
-        file_path = os.path.join(UPLOAD_DIR, "videos", filename)
-        
-        # 保存文件
-        with open(file_path, "wb") as buffer:
-            content = await file.read()
-            buffer.write(content)
-        
-        # 记录上传信息
+        filename = f"{current_user}_{test_session_id}_{folder}_{timestamp}.webm"
+        object_name = f"{folder}/{filename}"
+
+        # 读取内容
+        content = await file.read()
+
+        # 初始化 MinIO 客户端
+        parsed = urlparse(MINIO_URL)
+        if not parsed.scheme or not parsed.netloc:
+            raise HTTPException(status_code=500, detail="MINIO_URL 配置无效")
+        secure = parsed.scheme == "https"
+        endpoint = parsed.netloc
+        client = Minio(endpoint, access_key=MINIO_ACCESS_KEY, secret_key=MINIO_SECRET_KEY, secure=secure)
+
+        # 确保 bucket 存在
+        try:
+            if not client.bucket_exists(MINIO_BUCKET_NAME):
+                client.make_bucket(MINIO_BUCKET_NAME)
+        except S3Error as e:
+            raise HTTPException(status_code=500, detail=f"检查/创建 bucket 失败: {e}")
+
+        # 上传到 MinIO
+        try:
+            client.put_object(
+                MINIO_BUCKET_NAME,
+                object_name,
+                data=io.BytesIO(content),
+                length=len(content),
+                content_type=file.content_type,
+            )
+        except S3Error as e:
+            raise HTTPException(status_code=500, detail=f"上传到 MinIO 失败: {e}")
+
+        # 记录上传信息（沿用原结构，file_path 写成 MinIO 路径）
         upload_info = {
             "user": current_user,
             "test_session_id": test_session_id,
-            "video_type": video_type,
+            "video_type": folder,
             "filename": filename,
             "file_size": len(content),
             "upload_time": datetime.now().isoformat(),
-            "file_path": file_path
+            "file_path": f"minio://{MINIO_BUCKET_NAME}/{object_name}",
         }
-        
+
         # 保存上传记录到JSON文件
         uploads_log_file = os.path.join(UPLOAD_DIR, "uploads_log.json")
         uploads_log = []
         if os.path.exists(uploads_log_file):
             with open(uploads_log_file, 'r', encoding='utf-8') as f:
                 uploads_log = json.load(f)
-        
+
         uploads_log.append(upload_info)
-        
+
         with open(uploads_log_file, 'w', encoding='utf-8') as f:
             json.dump(uploads_log, f, ensure_ascii=False, indent=2)
-        
+
         return {
             "message": "视频上传成功",
             "filename": filename,
             "file_size": len(content),
-            "upload_time": upload_info["upload_time"]
+            "upload_time": upload_info["upload_time"],
         }
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"文件上传失败: {str(e)}")
 
@@ -276,4 +330,6 @@ async def submit_24point_test(
         raise HTTPException(status_code=500, detail=f"测试结果提交失败: {str(e)}")
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run(app, host=host, port=port)
