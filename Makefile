@@ -1,7 +1,7 @@
 # Makefile for project-kt3
 # Simple commands: install (update environment), start, stop
 
-.PHONY: install start stop status
+.PHONY: install start stop status gen-cert start-https stop-https start-all-https stop-all-https
 
 install:
 	@echo "Updating environment..."
@@ -18,6 +18,32 @@ start:
 	@echo "[frontend] Starting React dev server (http://localhost:3000)..."
 	@npm --prefix frontend start > frontend/dev.log 2>&1 & echo $$! > frontend/dev.pid
 	@echo "Services started. Backend: http://localhost:8000 | Frontend: http://localhost:3000"
+
+gen-cert:
+	@echo "Generating self-signed TLS certificate (valid for localhost)..."
+	@mkdir -p certs
+	@openssl req -x509 -nodes -newkey rsa:2048 -days 365 \
+		-keyout certs/server.key -out certs/server.crt \
+		-subj "/CN=localhost" \
+		-addext "subjectAltName=DNS:localhost,IP:127.0.0.1" >/dev/null 2>&1 || true
+	@echo "Certificate created: certs/server.crt, key: certs/server.key"
+
+start-https:
+	@echo "[backend] Starting FastAPI HTTPS (https://localhost:8443)..."
+	@cd backend && uv run uvicorn main:app --host 0.0.0.0 --port 8443 --reload \
+		--ssl-keyfile ../certs/server.key --ssl-certfile ../certs/server.crt \
+		> server-https.log 2>&1 & echo $$! > uvicorn-https.pid
+	@echo "HTTPS backend started at https://localhost:8443"
+
+start-all-https:
+	@echo "Generating TLS certificate if missing..."
+	@[ -f certs/server.crt ] && [ -f certs/server.key ] || $(MAKE) gen-cert
+	@echo "Starting backend (HTTPS :8443) and frontend (HTTPS :3000)..."
+	@cd backend && uv run uvicorn main:app --host 0.0.0.0 --port 8443 --reload \
+		--ssl-keyfile ../certs/server.key --ssl-certfile ../certs/server.crt \
+		> server-https.log 2>&1 & echo $$! > uvicorn-https.pid
+	@npm --prefix frontend run start-https > frontend/dev.log 2>&1 & echo $$! > frontend/dev.pid
+	@echo "Services started. Backend: https://localhost:8443 | Frontend: https://localhost:3000"
 
 stop:
 	@echo "Stopping services..."
@@ -38,6 +64,32 @@ stop:
 		[ -z "$$pids" ] || kill $$pids 2>/dev/null || true; \
 	}
 	@echo "Services stopped."
+
+stop-https:
+	@echo "Stopping HTTPS backend..."
+	@[ ! -f backend/uvicorn-https.pid ] || (kill $$(cat backend/uvicorn-https.pid) 2>/dev/null || true)
+	@rm -f backend/uvicorn-https.pid
+	@{ command -v fuser >/dev/null && fuser -k 8443/tcp 2>/dev/null || true; } || { \
+		command -v lsof >/dev/null && pids=$$(lsof -ti:8443 2>/dev/null || true); \
+		[ -z "$$pids" ] || kill $$pids 2>/dev/null || true; \
+	}
+	@echo "HTTPS backend stopped."
+
+stop-all-https:
+	@echo "Stopping HTTPS backend and frontend..."
+	@[ ! -f backend/uvicorn-https.pid ] || (kill $$(cat backend/uvicorn-https.pid) 2>/dev/null || true)
+	@rm -f backend/uvicorn-https.pid
+	@{ command -v fuser >/dev/null && fuser -k 8443/tcp 2>/dev/null || true; } || { \
+		command -v lsof >/dev/null && pids=$$(lsof -ti:8443 2>/dev/null || true); \
+		[ -z "$$pids" ] || kill $$pids 2>/dev/null || true; \
+	}
+	@[ ! -f frontend/dev.pid ] || (kill $$(cat frontend/dev.pid) 2>/dev/null || true)
+	@rm -f frontend/dev.pid
+	@{ command -v fuser >/dev/null && fuser -k 3000/tcp 2>/dev/null || true; } || { \
+		command -v lsof >/dev/null && pids=$$(lsof -ti:3000 2>/dev/null || true); \
+		[ -z "$$pids" ] || kill $$pids 2>/dev/null || true; \
+	}
+	@echo "HTTPS services stopped."
 
 status:
 	@echo "Service status:"

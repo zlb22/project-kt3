@@ -25,7 +25,7 @@
   },
   "scripts": {
     "start": "react-scripts start",
-    "start-https": "HTTPS=true react-scripts start",
+    "start-https": "NODE_TLS_REJECT_UNAUTHORIZED=0 HTTPS=true SSL_CRT_FILE=../certs/server.crt SSL_KEY_FILE=../certs/server.key react-scripts start",
     "build": "react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
@@ -48,5 +48,5 @@
       "last 1 safari version"
     ]
   },
-  "proxy": "http://localhost:8000"
+  "proxy": "https://localhost:8443"
 }
