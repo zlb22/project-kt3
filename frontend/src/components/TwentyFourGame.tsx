@@ -64,6 +64,31 @@ const TwentyFourGame: React.FC<TwentyFourGameProps> = ({ onBack }) => {
   const [gameStartTime, setGameStartTime] = useState<Date | null>(null);
   const [questionStartTime, setQuestionStartTime] = useState<Date | null>(null);
   
+  // 按页面指定上传使用的 MinIO bucket（可按业务需要改为从配置或用户态获取）
+  const UPLOAD_BUCKET = 'onlineclass';
+  
+  // 工具函数：格式化秒为 mm:ss
+  const formatTime = (seconds: number): string => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+  
+  // 简单表达式评估器（仅用于演示，不做严格的数字来源校验）
+  const evaluateExpression = (expr: string, _numbers: number[]): boolean => {
+    try {
+      // 仅允许数字、空格、运算符和括号
+      if (!/^[-+*/() 0-9.]+$/.test(expr)) return false;
+      // 使用 Function 进行计算（注意：生产环境建议替换为更安全的解析器）
+      // eslint-disable-next-line no-new-func
+      const val = Function(`"use strict"; return (${expr})`)();
+      if (typeof val !== 'number' || Number.isNaN(val) || !Number.isFinite(val)) return false;
+      return Math.abs(val - 24) < 1e-6;
+    } catch {
+      return false;
+    }
+  };
+  
   // 视频相关状态
   const [videos] = useState<VideoProgress[]>([
     { videoId: 1, title: '24点游戏基础规则', duration: 120, watchedTime: 0, completed: false },
@@ -670,8 +695,7 @@ const TwentyFourGame: React.FC<TwentyFourGameProps> = ({ onBack }) => {
   const uploadRecordedVideos = async () => {
     const testSessionId = new Date().getTime().toString(); // 使用时间戳作为会话ID
     const uploadPromises: Promise<any>[] = [];
-    // 按页面动态选择要上传的 bucket（可按路由/用户/业务动态决定）
-    const uploadBucket = 'onlineclass';
+    // 按页面动态选择要上传的 bucket（可按路由/用户/业务动态决定），此处使用常量 UPLOAD_BUCKET
     
     console.log('开始上传视频，录制状态:', {
       isRecording,
@@ -705,7 +729,7 @@ const TwentyFourGame: React.FC<TwentyFourGameProps> = ({ onBack }) => {
         cameraFormData.append('file', cameraBlob, `camera_${testSessionId}.webm`);
         cameraFormData.append('video_type', 'camera');
         cameraFormData.append('test_session_id', testSessionId);
-        cameraFormData.append('bucket', uploadBucket);
+        cameraFormData.append('bucket', UPLOAD_BUCKET);
         
         const cameraUpload = fetch('/api/upload/video', {
           method: 'POST',
@@ -725,7 +749,7 @@ const TwentyFourGame: React.FC<TwentyFourGameProps> = ({ onBack }) => {
         screenFormData.append('file', screenBlob, `screen_${testSessionId}.webm`);
         screenFormData.append('video_type', 'screen');
         screenFormData.append('test_session_id', testSessionId);
-        screenFormData.append('bucket', uploadBucket);
+        screenFormData.append('bucket', UPLOAD_BUCKET);
         
         const screenUpload = fetch('/api/upload/video', {
           method: 'POST',
@@ -831,20 +855,15 @@ const TwentyFourGame: React.FC<TwentyFourGameProps> = ({ onBack }) => {
     if (testTimerRef.current) {
       clearInterval(testTimerRef.current);
     }
-    
     const endTime = new Date();
     const testDuration = gameStartTime ? Math.floor((endTime.getTime() - gameStartTime.getTime()) / 1000) : 0;
     setTotalTestTime(testDuration);
     
-    // 停止录制
+    // 停止录制并切到结果页
     stopRecording();
-    
     setCurrentPhase('result');
     
-    // 保存测试结果到服务器
-    await saveTestResults();
-    
-    // 延迟上传视频，确保录制已完全停止并且数据已收集
+    // 延迟上传，确保录制器完全停止并收集到所有数据
     setTimeout(async () => {
       console.log('🔍 延迟检查录制数据状态:');
       console.log('📹 摄像头数据块数:', cameraChunksRef.current.length);
@@ -855,57 +874,28 @@ const TwentyFourGame: React.FC<TwentyFourGameProps> = ({ onBack }) => {
       const uploadResult = await uploadRecordedVideos();
       if (uploadResult.success) {
         console.log('视频上传成功，会话ID:', uploadResult.sessionId);
+        const videosMeta = (uploadResult.results || []).map((r: any) => ({
+          type: r.video_type,
+          bucket: r.bucket,
+          object_name: r.object_name,
+          file_path: r.file_path,
+          file_size: r.file_size,
+          content_type: r.content_type,
+          upload_time: r.upload_time,
+          test_session_id: r.test_session_id,
+        }));
+        await saveTestResults(videosMeta, uploadResult.sessionId);
       } else {
         console.error('视频上传失败:', uploadResult.error);
+        // 即便视频失败，也提交测试结果（无视频引用）
+        await saveTestResults([], undefined);
       }
-    }, 2000); // 增加延迟时间到2秒
+    }, 2000);
   };
 
-  // 严格的表达式验证，确保只使用给定的数字和运算符
-  const evaluateExpression = (expression: string, numbers: number[]): boolean => {
-    try {
-      // 移除所有空格
-      const cleanExpression = expression.replace(/\s/g, '');
-      
-      // 检查是否只包含允许的字符：数字、运算符、括号
-      if (!/^[\d+\-*/().]+$/.test(cleanExpression)) {
-        return false;
-      }
-      
-      // 提取表达式中的所有数字
-      const usedNumbers = cleanExpression.match(/\d+/g);
-      if (!usedNumbers) {
-        return false;
-      }
-      
-      // 将字符串数字转换为数字数组并排序
-      const usedNumbersArray = usedNumbers.map(num => parseInt(num)).sort();
-      const givenNumbersArray = [...numbers].sort();
-      
-      // 检查使用的数字是否完全匹配给定的数字
-      if (usedNumbersArray.length !== givenNumbersArray.length) {
-        return false;
-      }
-      
-      for (let i = 0; i < usedNumbersArray.length; i++) {
-        if (usedNumbersArray[i] !== givenNumbersArray[i]) {
-          return false;
-        }
-      }
-      
-      // 验证表达式语法并计算结果
-      const result = eval(cleanExpression);
-      
-      // 检查结果是否为24（允许小的浮点误差）
-      return Math.abs(result - 24) < 0.0001;
-    } catch {
-      return false;
-    }
-  };
-
-  // 保存测试结果到服务器
-  const saveTestResults = async () => {
-    const results = {
+  // 保存测试结果到服务器（带视频元信息）
+  const saveTestResults = async (videosMeta?: any[], sessionId?: string) => {
+    const results: any = {
       totalScore,
       totalVideoTime,
       totalTestTime,
@@ -919,9 +909,10 @@ const TwentyFourGame: React.FC<TwentyFourGameProps> = ({ onBack }) => {
       })),
       timestamp: new Date().toISOString(),
     };
+    if (sessionId) results.test_session_id = sessionId;
+    if (videosMeta && videosMeta.length > 0) results.videos = videosMeta;
     
     try {
-      // 上传测试结果到服务器
       const response = await fetch('/api/tests/24point/submit', {
         method: 'POST',
         headers: {
@@ -930,7 +921,6 @@ const TwentyFourGame: React.FC<TwentyFourGameProps> = ({ onBack }) => {
         },
         body: JSON.stringify(results)
       });
-      
       if (response.ok) {
         const result = await response.json();
         console.log('测试结果上传成功:', result);
@@ -940,16 +930,8 @@ const TwentyFourGame: React.FC<TwentyFourGameProps> = ({ onBack }) => {
     } catch (error) {
       console.error('测试结果上传失败:', error);
     }
-    
-    // 同时保存到本地作为备份
+    // 本地备份
     localStorage.setItem('twentyFourGameResults', JSON.stringify(results));
-  };
-
-  // 格式化时间显示
-  const formatTime = (seconds: number): string => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
   // 清理定时器和录制资源

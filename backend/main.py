@@ -284,6 +284,9 @@ async def upload_video(
             "filename": filename,
             "file_size": len(content),
             "upload_time": datetime.now().isoformat(),
+            "bucket": target_bucket,
+            "object_name": object_name,
+            "content_type": file.content_type,
             "file_path": f"minio://{target_bucket}/{object_name}",
         }
 
@@ -301,8 +304,14 @@ async def upload_video(
 
         return {
             "message": "视频上传成功",
+            "video_type": upload_info["video_type"],
             "filename": filename,
             "file_size": len(content),
+            "content_type": file.content_type,
+            "bucket": target_bucket,
+            "object_name": object_name,
+            "file_path": upload_info["file_path"],
+            "test_session_id": test_session_id,
             "upload_time": upload_info["upload_time"],
         }
 
@@ -316,29 +325,30 @@ async def submit_24point_test(
     test_data: dict,
     current_user: str = Depends(verify_token)
 ):
-    """Submit 24-point test results"""
+    """Submit 24-point test results and persist to MongoDB with video meta references."""
     try:
-        # 添加用户信息和时间戳
-        test_data["user"] = current_user
-        test_data["submit_time"] = datetime.now().isoformat()
-        
-        # 保存测试结果
-        results_dir = os.path.join(UPLOAD_DIR, "test_results")
-        os.makedirs(results_dir, exist_ok=True)
-        
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        result_filename = f"{current_user}_24point_{timestamp}.json"
-        result_path = os.path.join(results_dir, result_filename)
-        
-        with open(result_path, 'w', encoding='utf-8') as f:
-            json.dump(test_data, f, ensure_ascii=False, indent=2)
-        
+        # 构造文档
+        doc = dict(test_data or {})
+        doc["user"] = current_user
+        doc.setdefault("test_id", "24point")
+        doc["submit_time"] = datetime.now().isoformat()
+
+        # videos 字段如果存在，确保是列表，元素推荐包含：
+        # {type, bucket, object_name, file_path, file_size, content_type}
+        vids = doc.get("videos")
+        if vids is not None and not isinstance(vids, list):
+            doc["videos"] = [vids]
+
+        # 入库到 test_results 集合
+        result = await db.onlineclass.insert_one(doc)
+
         return {
             "message": "测试结果提交成功",
-            "result_id": result_filename,
-            "submit_time": test_data["submit_time"]
+            "id": str(result.inserted_id),
+            "submit_time": doc["submit_time"],
+            "user": current_user,
+            "test_id": doc.get("test_id", "24point"),
         }
-        
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"测试结果提交失败: {str(e)}")
 
