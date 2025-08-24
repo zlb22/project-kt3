@@ -208,95 +208,181 @@ const TwentyFourGame: React.FC<TwentyFourGameProps> = ({ onBack }) => {
     startRecording();
   };
 
+  // 检测浏览器类型
+  const getBrowserInfo = () => {
+    const userAgent = navigator.userAgent;
+    const isSafari = /^((?!chrome|android).)*safari/i.test(userAgent);
+    const isChrome = /chrome/i.test(userAgent) && !/edg/i.test(userAgent);
+    const isFirefox = /firefox/i.test(userAgent);
+    const isEdge = /edg/i.test(userAgent);
+    
+    return { isSafari, isChrome, isFirefox, isEdge, userAgent };
+  };
+
   // 开始录制功能
   const startRecording = async () => {
     try {
       setIsRecording(true);
+      const browserInfo = getBrowserInfo();
+      console.log('🌐 浏览器信息:', browserInfo);
       
       let localCameraStream: MediaStream | null = null;
       let localScreenStream: MediaStream | null = null;
       
-      // 尝试获取摄像头权限和流
-      try {
-        console.log('🔍 正在请求摄像头权限...');
+      // 并行请求权限，避免浏览器差异导致的阻塞问题
+      const requestPermissions = async () => {
+        const promises: Promise<any>[] = [];
         
-        // 首先检查摄像头权限状态
-        const cameraPermission = await navigator.permissions.query({ name: 'camera' as PermissionName });
-        console.log('📹 摄像头权限状态:', cameraPermission.state);
-        
-        if (cameraPermission.state === 'denied') {
-          throw new Error('摄像头权限被拒绝，请在浏览器设置中允许摄像头访问');
-        }
-        
-        // 尝试多种摄像头配置，从最宽松开始
-        let cameraConstraints: MediaStreamConstraints[] = [
-          { video: true, audio: false }, // 最宽松的配置
-          { video: { facingMode: 'user' }, audio: false }, // 偏好前置摄像头
-          { video: { width: 1280, height: 720 }, audio: false }, // 指定分辨率
-        ];
-        
-        for (let i = 0; i < cameraConstraints.length; i++) {
+        // 摄像头权限请求
+        const requestCamera = async (): Promise<MediaStream | null> => {
           try {
-            console.log(`📹 尝试摄像头配置 ${i + 1}:`, cameraConstraints[i]);
-            localCameraStream = await navigator.mediaDevices.getUserMedia(cameraConstraints[i]);
-            console.log('✅ 摄像头获取成功！流状态:', localCameraStream.active, '轨道数:', localCameraStream.getTracks().length);
+            console.log('🔍 正在请求摄像头权限...');
             
-            // 验证流是否真的有效
-            const videoTracks = localCameraStream.getVideoTracks();
-            if (videoTracks.length === 0) {
-              throw new Error('获取到的流没有视频轨道');
-            }
-            
-            console.log('📹 视频轨道信息:', videoTracks.map(t => ({
-              label: t.label,
-              kind: t.kind,
-              readyState: t.readyState,
-              enabled: t.enabled,
-              muted: t.muted
-            })));
-            
-            // 验证摄像头是否真的被激活（Mac上应该看到指示灯亮起）
-            console.log('🔍 验证摄像头激活状态...');
-            const testTrack = videoTracks[0];
-            if (testTrack.readyState === 'live' && testTrack.enabled && !testTrack.muted) {
-              console.log('✅ 摄像头应该已激活 - Mac用户应该看到摄像头指示灯亮起');
-              
-              // 额外验证：尝试获取视频帧
-              setTimeout(() => {
-                if (cameraPreviewRef.current) {
-                  const video = cameraPreviewRef.current as HTMLVideoElement;
-                  if (video.videoWidth > 0 && video.videoHeight > 0) {
-                    console.log('✅ 摄像头视频流正常，分辨率:', video.videoWidth, 'x', video.videoHeight);
-                  } else {
-                    console.warn('⚠️ 摄像头视频流无尺寸信息，可能未真正激活');
-                  }
+            // Safari需要特殊处理权限检查
+            if (!browserInfo.isSafari) {
+              try {
+                const cameraPermission = await navigator.permissions.query({ name: 'camera' as PermissionName });
+                console.log('📹 摄像头权限状态:', cameraPermission.state);
+                
+                if (cameraPermission.state === 'denied') {
+                  throw new Error('摄像头权限被拒绝，请在浏览器设置中允许摄像头访问');
                 }
-              }, 2000);
-            } else {
-              console.warn('⚠️ 摄像头轨道状态异常:', {
-                readyState: testTrack.readyState,
-                enabled: testTrack.enabled,
-                muted: testTrack.muted
-              });
+              } catch (permError) {
+                console.warn('📹 权限查询失败，继续尝试获取流:', permError);
+              }
             }
             
-            break; // 成功获取，跳出循环
-          } catch (constraintError) {
-            console.warn(`📹 配置 ${i + 1} 失败:`, constraintError);
-            if (i === cameraConstraints.length - 1) {
-              throw constraintError; // 所有配置都失败，抛出最后一个错误
+            // 尝试多种摄像头配置，从最宽松开始
+            let cameraConstraints: MediaStreamConstraints[] = [
+              { video: true, audio: false }, // 最宽松的配置
+              { video: { facingMode: 'user' }, audio: false }, // 偏好前置摄像头
+              { video: { width: 1280, height: 720 }, audio: false }, // 指定分辨率
+            ];
+            
+            for (let i = 0; i < cameraConstraints.length; i++) {
+              try {
+                console.log(`📹 尝试摄像头配置 ${i + 1}:`, cameraConstraints[i]);
+                const stream = await navigator.mediaDevices.getUserMedia(cameraConstraints[i]);
+                console.log('✅ 摄像头获取成功！流状态:', stream.active, '轨道数:', stream.getTracks().length);
+                
+                // 验证流是否真的有效
+                const videoTracks = stream.getVideoTracks();
+                if (videoTracks.length === 0) {
+                  throw new Error('获取到的流没有视频轨道');
+                }
+                
+                console.log('📹 视频轨道信息:', videoTracks.map(t => ({
+                  label: t.label,
+                  kind: t.kind,
+                  readyState: t.readyState,
+                  enabled: t.enabled,
+                  muted: t.muted
+                })));
+                
+                return stream;
+              } catch (constraintError) {
+                console.warn(`📹 配置 ${i + 1} 失败:`, constraintError);
+                if (i === cameraConstraints.length - 1) {
+                  throw constraintError;
+                }
+              }
             }
+            return null;
+          } catch (cameraError) {
+            console.warn('📹 摄像头权限获取失败:', cameraError);
+            return null;
+          }
+        };
+        
+        // 屏幕录制权限请求
+        const requestScreen = async (): Promise<MediaStream | null> => {
+          try {
+            console.log('🖥️ 正在请求屏幕录制权限...');
+            
+            // 检查浏览器是否支持屏幕录制
+            if (!navigator.mediaDevices.getDisplayMedia) {
+              throw new Error('浏览器不支持屏幕录制功能');
+            }
+            
+            // Safari对屏幕录制的支持较晚，需要特殊处理
+            let displayMediaOptions: MediaStreamConstraints;
+            
+            if (browserInfo.isSafari) {
+              // Safari使用更简单的配置
+              displayMediaOptions = {
+                video: true,
+                audio: false // Safari对音频支持不稳定
+              };
+            } else {
+              // Chrome/Firefox/Edge使用完整配置
+              displayMediaOptions = {
+                video: { 
+                  width: 1920, 
+                  height: 1080,
+                  frameRate: 30
+                },
+                audio: true
+              };
+            }
+            
+            console.log('🖥️ 屏幕录制配置:', displayMediaOptions);
+            const stream = await navigator.mediaDevices.getDisplayMedia(displayMediaOptions);
+            console.log('✅ 屏幕录制获取成功！流状态:', stream.active, '轨道数:', stream.getTracks().length);
+            
+            return stream;
+          } catch (screenError) {
+            console.warn('🖥️ 屏幕录制权限获取失败:', screenError);
+            return null;
+          }
+        };
+        
+        // 根据浏览器类型决定请求策略
+        if (browserInfo.isSafari) {
+          // Safari: 先请求摄像头，成功后再请求屏幕录制
+          console.log('🍎 Safari浏览器：顺序请求权限');
+          localCameraStream = await requestCamera();
+          
+          // 给Safari一些时间处理摄像头权限
+          await new Promise(resolve => setTimeout(resolve, 500));
+          
+          localScreenStream = await requestScreen();
+        } else {
+          // Chrome/Firefox/Edge: 并行请求权限
+          console.log('🌐 非Safari浏览器：并行请求权限');
+          const [cameraResult, screenResult] = await Promise.allSettled([
+            requestCamera(),
+            requestScreen()
+          ]);
+          
+          localCameraStream = cameraResult.status === 'fulfilled' ? cameraResult.value : null;
+          localScreenStream = screenResult.status === 'fulfilled' ? screenResult.value : null;
+          
+          if (cameraResult.status === 'rejected') {
+            console.warn('📹 摄像头请求被拒绝:', cameraResult.reason);
+          }
+          if (screenResult.status === 'rejected') {
+            console.warn('🖥️ 屏幕录制请求被拒绝:', screenResult.reason);
           }
         }
-        
+      };
+      
+      await requestPermissions();
+      
+      // 设置获取到的流
+      if (localCameraStream) {
         setCameraStream(localCameraStream);
         
-        // 设置摄像头预览，确保元素已开始播放
-        if (cameraPreviewRef.current && localCameraStream) {
+        // 设置摄像头预览
+        if (cameraPreviewRef.current) {
           const v = cameraPreviewRef.current as HTMLVideoElement;
           v.srcObject = localCameraStream;
           const ensurePlay = async () => {
-            try { await v.play(); } catch (e) { console.warn('📹 预览播放被阻止，等待用户交互后重试', e); }
+            try { 
+              await v.play(); 
+              console.log('📹 摄像头预览播放成功');
+            } catch (e) { 
+              console.warn('📹 预览播放被阻止，等待用户交互后重试', e); 
+            }
           };
           if (v.readyState >= 2) {
             ensurePlay();
@@ -305,48 +391,65 @@ const TwentyFourGame: React.FC<TwentyFourGameProps> = ({ onBack }) => {
           }
         }
         
-        // 绑定轨道的生命周期事件，定位为何会变为 inactive
-        if (localCameraStream) {
-          localCameraStream.getTracks().forEach((track) => {
-          track.onended = () => console.warn('📹 采集到的摄像头轨道已结束', { kind: track.kind, label: track.label, readyState: track.readyState });
-          // @ts-ignore 部分浏览器支持
-          track.onmute = () => console.warn('📹 采集到的摄像头轨道被静音/挂起', { kind: track.kind, label: track.label, readyState: track.readyState });
-          // @ts-ignore 部分浏览器支持
-          track.onunmute = () => console.log('📹 采集到的摄像头轨道恢复', { kind: track.kind, label: track.label, readyState: track.readyState });
+        // 绑定轨道生命周期事件
+        (localCameraStream as MediaStream).getTracks().forEach((track: MediaStreamTrack) => {
+          track.onended = () => console.warn('📹 摄像头轨道已结束', { kind: track.kind, label: track.label });
+        });
+        
+        console.log('✅ 摄像头权限获取成功');
+      }
+      
+      if (localScreenStream) {
+        setScreenStream(localScreenStream);
+        
+        // 监听屏幕录制停止事件
+        const screenVideoTrack = (localScreenStream as MediaStream).getVideoTracks()[0];
+        if (screenVideoTrack) {
+          screenVideoTrack.addEventListener('ended', () => {
+            console.log('🖥️ 用户停止了屏幕分享');
           });
         }
-
-        console.log('摄像头权限获取成功');
-      } catch (cameraError) {
-        console.warn('摄像头权限获取失败:', cameraError);
-        // 摄像头失败不阻止整个流程，继续尝试屏幕录制
+        
+        console.log('✅ 屏幕录制权限获取成功');
       }
 
-      // 尝试获取屏幕录制权限和流
-      try {
-        localScreenStream = await navigator.mediaDevices.getDisplayMedia({
-          video: { width: 1920, height: 1080 },
-          audio: true
-        });
-        setScreenStream(localScreenStream);
-        console.log('屏幕录制权限获取成功');
-      } catch (screenError) {
-        console.warn('屏幕录制权限获取失败:', screenError);
-        // 屏幕录制失败不阻止整个流程
-      }
-
+      // 权限获取结果检查
+      const permissionResults = {
+        camera: !!localCameraStream,
+        screen: !!localScreenStream,
+        browser: browserInfo.isSafari ? 'Safari' : browserInfo.isChrome ? 'Chrome' : 'Other'
+      };
+      
+      console.log('🔍 权限获取结果:', permissionResults);
+      
       // 如果两个都失败了，显示提示但不阻止测试
       if (!localCameraStream && !localScreenStream) {
         setIsRecording(false);
-        alert('无法启动录制功能。您可以继续进行测试，但不会记录视频数据。\n\n请确保：\n1. 浏览器支持媒体录制功能\n2. 已授权摄像头和屏幕录制权限\n3. 使用HTTPS协议访问（本地开发除外）');
+        const errorMsg = `无法启动录制功能。您可以继续进行测试，但不会记录视频数据。\n\n浏览器: ${permissionResults.browser}\n\n请确保：\n1. 浏览器支持媒体录制功能\n2. 已授权摄像头和屏幕录制权限\n3. 使用HTTPS协议访问（本地开发除外）\n4. ${browserInfo.isSafari ? 'Safari用户请确保系统版本支持屏幕录制' : 'Chrome用户请检查摄像头权限设置'}`;
+        alert(errorMsg);
         return;
+      }
+      
+      // 显示获取到的权限信息
+      if (localCameraStream && !localScreenStream) {
+        console.warn('⚠️ 仅获取到摄像头权限，屏幕录制不可用');
+        if (browserInfo.isSafari) {
+          alert('Safari检测到仅获取摄像头权限。\n\n可能原因：\n1. Safari版本过低不支持屏幕录制\n2. 系统权限未开启\n3. 用户拒绝了屏幕录制权限\n\n测试将继续进行，但只会录制摄像头画面。');
+        }
+      } else if (!localCameraStream && localScreenStream) {
+        console.warn('⚠️ 仅获取到屏幕录制权限，摄像头不可用');
+        if (browserInfo.isChrome) {
+          alert('Chrome检测到仅获取屏幕录制权限。\n\n可能原因：\n1. 摄像头被其他应用占用\n2. 用户拒绝了摄像头权限\n3. 摄像头硬件故障\n\n测试将继续进行，但只会录制屏幕画面。');
+        }
+      } else {
+        console.log('✅ 成功获取摄像头和屏幕录制权限');
       }
 
       // 创建摄像头录制器（如果有摄像头流）
       console.log('🔍 检查摄像头流状态:', {
         cameraStreamExists: !!localCameraStream,
-        cameraStreamActive: localCameraStream?.active,
-        cameraStreamTracks: localCameraStream?.getTracks().length
+        cameraStreamActive: (localCameraStream as MediaStream | null)?.active,
+        cameraStreamTracks: (localCameraStream as MediaStream | null)?.getTracks().length || 0
       });
       
       if (localCameraStream) {
@@ -363,13 +466,13 @@ const TwentyFourGame: React.FC<TwentyFourGameProps> = ({ onBack }) => {
           }
           
           console.log('📹 摄像头录制使用格式:', mimeType);
-          console.log('📹 摄像头流状态:', localCameraStream.active, '轨道数:', localCameraStream.getTracks().length);
+          console.log('📹 摄像头流状态:', (localCameraStream as MediaStream).active, '轨道数:', (localCameraStream as MediaStream).getTracks().length);
 
           // 仅使用视频轨道来进行录制，避免音频轨道导致的不兼容问题
-          const videoTracks = localCameraStream.getVideoTracks();
+          const videoTracks = (localCameraStream as MediaStream).getVideoTracks();
           const cameraRecordStream = new MediaStream(videoTracks);
-          // 监控轨道结束事件，定位流为何变为 inactive
-          videoTracks.forEach((track) => {
+                // 监控轨道结束事件，定位流为何变为 inactive
+          videoTracks.forEach((track: MediaStreamTrack) => {
             track.onended = () => {
               console.warn('📹 摄像头视频轨道已结束', {
                 label: track.label,
@@ -440,8 +543,8 @@ const TwentyFourGame: React.FC<TwentyFourGameProps> = ({ onBack }) => {
             setTimeout(() => {
               console.log('📹 摄像头录制器启动后状态检查:', cameraRecorder.state);
               if (localCameraStream) {
-                console.log('📹 摄像头流是否还活跃:', localCameraStream.active);
-                console.log('📹 摄像头轨道状态:', localCameraStream.getTracks().map(track => ({
+                console.log('📹 摄像头流是否还活跃:', (localCameraStream as MediaStream).active);
+                console.log('📹 摄像头轨道状态:', (localCameraStream as MediaStream).getTracks().map(track => ({
                   kind: track.kind,
                   enabled: track.enabled,
                   readyState: track.readyState
@@ -452,7 +555,7 @@ const TwentyFourGame: React.FC<TwentyFourGameProps> = ({ onBack }) => {
                 console.error('📹 ❌ 摄像头录制器启动失败！状态仍为 inactive');
                 
                 // 尝试重新启动录制器
-                if (localCameraStream && localCameraStream.active) {
+                if (localCameraStream && (localCameraStream as MediaStream).active) {
                   console.log('📹 🔄 尝试重新启动摄像头录制器...');
                   try {
                     cameraRecorder.start();
@@ -632,10 +735,13 @@ const TwentyFourGame: React.FC<TwentyFourGameProps> = ({ onBack }) => {
 
       // 监听屏幕录制停止事件（用户点击停止分享）
       if (localScreenStream) {
-        localScreenStream.getVideoTracks()[0].addEventListener('ended', () => {
-          console.log('用户停止了屏幕分享');
-          // 可以选择停止整个录制或仅停止屏幕录制
-        });
+        const screenVideoTrack = (localScreenStream as MediaStream).getVideoTracks()[0];
+        if (screenVideoTrack) {
+          screenVideoTrack.addEventListener('ended', () => {
+            console.log('用户停止了屏幕分享');
+            // 可以选择停止整个录制或仅停止屏幕录制
+          });
+        }
       }
 
     } catch (error) {
