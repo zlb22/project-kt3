@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Container,
@@ -9,9 +9,32 @@ import {
   IconButton,
 } from '@mui/material';
 import { ArrowBack } from '@mui/icons-material';
+import ThirdPartyApp from '../components/ThirdPartyApp';
 
 const InteractiveDiscussion: React.FC = () => {
   const navigate = useNavigate();
+  const [showThirdPartyApp, setShowThirdPartyApp] = useState(false);
+
+  const handleStartDiscussion = () => {
+    setShowThirdPartyApp(true);
+  };
+
+  const handleBackToSelection = () => {
+    setShowThirdPartyApp(false);
+  };
+
+  if (showThirdPartyApp) {
+    return (
+      <ThirdPartyApp 
+        onBack={handleBackToSelection}
+        appUrl="http://172.24.125.63:8080/creative-solutions/"
+        appName="互动讨论"
+        description="创意解决方案讨论平台"
+        openInNewWindow={false}
+        authMethod="url-token"
+      />
+    );
+  }
 
   return (
     <div className="page-container">
@@ -25,12 +48,12 @@ const InteractiveDiscussion: React.FC = () => {
 
       <Container maxWidth="lg">
         <Typography variant="h4" component="h1" className="title-text">
-          互动讨论场景下智能化测评功能选择
+          在线实验场景下智能化测评功能选择
         </Typography>
 
         <Paper className="button-container" elevation={3}>
           <Typography variant="h5" component="h2" textAlign="center" mb={4}>
-            互动讨论测评
+            在线实验测评
           </Typography>
 
           <Box textAlign="center" mb={4}>
@@ -38,19 +61,29 @@ const InteractiveDiscussion: React.FC = () => {
               此功能正在开发中，将包含以下特性：
             </Typography>
             <Typography variant="body2" color="text.secondary" component="div" textAlign="left">
-              • 实时互动讨论场景<br/>
-              • 协作能力评估<br/>
-              • 沟通技巧分析<br/>
-              • 团队合作表现<br/>
-              • 综合能力报告
+              • 创意解决方案讨论<br/>
+              • 在线协作实验<br/>
+              • 问题解决能力评估<br/>
+              • 创新思维分析<br/>
+              • 实验结果报告
             </Typography>
           </Box>
 
-          <Box className="navigation-buttons">
+          <Box className="navigation-buttons" display="flex" flexDirection="column" alignItems="center" gap={2}>
             <Button
               variant="contained"
               color="primary"
+              size="large"
+              onClick={handleStartDiscussion}
+              sx={{ minWidth: 200 }}
+            >
+              开始在线实验
+            </Button>
+            <Button
+              variant="outlined"
+              color="primary"
               onClick={() => navigate('/dashboard')}
+              sx={{ minWidth: 200 }}
             >
               返回主页
             </Button>

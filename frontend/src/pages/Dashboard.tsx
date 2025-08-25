@@ -36,13 +36,13 @@ const Dashboard: React.FC = () => {
       },
       {
         id: 'interactive_discussion',
-        name: '互动讨论',
-        description: '互动讨论能力评估'
+        name: '在线实验',
+        description: '在线实验能力评估'
       },
       {
         id: 'online_class',
-        name: '在线实验',
-        description: '在线实验学习平台'
+        name: '在线微课',
+        description: '在线微课学习平台'
       }
     ];
     setTests(mainTests);
