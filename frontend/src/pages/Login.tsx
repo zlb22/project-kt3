@@ -98,6 +98,16 @@ const Login: React.FC = () => {
                 修改密码
               </Button>
             </Link>
+            <Box mt={1}>
+              <Typography variant="body2" color="textSecondary">
+                还没有账号？
+              </Typography>
+              <Link to="/register" style={{ textDecoration: 'none' }}>
+                <Button variant="text" color="primary">
+                  立即注册
+                </Button>
+              </Link>
+            </Box>
           </Box>
         </Paper>
       </Container>

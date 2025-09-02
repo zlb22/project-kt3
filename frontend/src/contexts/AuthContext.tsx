@@ -3,13 +3,26 @@ import axios from 'axios';
 
 interface User {
   username: string;
+  school: string;
+  student_id: string;
+  grade: string;
   is_active: boolean;
+  created_at?: string;
+}
+
+interface RegisterData {
+  username: string;
+  school: string;
+  student_id: string;
+  grade: string;
+  password: string;
 }
 
 interface AuthContextType {
   user: User | null;
   token: string | null;
   login: (username: string, password: string) => Promise<boolean>;
+  register: (userData: RegisterData) => Promise<boolean>;
   logout: () => void;
   changePassword: (oldPassword: string, newPassword: string) => Promise<boolean>;
   isLoading: boolean;
@@ -94,6 +107,21 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     delete axios.defaults.headers.common['Authorization'];
   };
 
+  const register = async (userData: RegisterData): Promise<boolean> => {
+    try {
+      const response = await axios.post('/api/auth/register', userData);
+      console.log('Registration successful:', response.data);
+      return true;
+    } catch (error) {
+      console.error('Registration failed:', error);
+      if (axios.isAxiosError(error)) {
+        console.error('Error response:', error.response?.data);
+        console.error('Error status:', error.response?.status);
+      }
+      return false;
+    }
+  };
+
   const changePassword = async (oldPassword: string, newPassword: string): Promise<boolean> => {
     try {
       await axios.post('/api/auth/change-password', {
@@ -111,6 +139,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     user,
     token,
     login,
+    register,
     logout,
     changePassword,
     isLoading,

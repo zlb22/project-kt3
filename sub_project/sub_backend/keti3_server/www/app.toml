@@ -1,0 +1,72 @@
+# 运行环境，监听端口
+[server]
+addr = ":8096"
+app_name = "base_keti"
+read_timeout = "5s"
+write_timeout = "10s"
+idle_timeout = "30s"
+# pprof_close = true #无此配置项或者=false时打开,=true时关闭
+# pprof_port = ":15555" #可自定义端口，默认":15555"
+
+# 日志配置
+[log]
+# 日志输出目录，默认当前项目目录的logs目录
+path = "./logs/"
+
+#单实例配置，配置后直接调用pontos.Mysql
+[mysql_map]
+[mysql_map.base_keti.master]
+charset = "utf8mb4"
+database = "base_keti"
+host = "localhost"
+loc = "Local"
+password = "O6hUdaSIlKlaTXaoB"
+port = 3306
+read_timeout = "5s"
+timeout = "5s"
+user = "keti3"
+write_timeout = "5s"
+#设置连接池中空闲连接的最大数量。
+set_max_idle_conns = 50
+#设置打开数据库连接的最大数量。
+set_max_open_conns = 100
+#设置连接可复用的最大时间,单位：秒
+set_conn_max_lifetime = "60s"
+
+[mysql_map.base_keti.slave]
+charset = "utf8mb4"
+database = "base_keti"
+host = "localhost"
+loc = "Local"
+password = "O6hUdaSIlKlaTXaoB"
+port = 3306
+read_timeout = "5s"
+timeout = "5s"
+user = "keti3"
+write_timeout = "5s"
+#设置连接池中空闲连接的最大数量。
+set_max_idle_conns = 50
+#设置打开数据库连接的最大数量。
+set_max_open_conns = 100
+#设置连接可复用的最大时间,单位：秒
+set_conn_max_lifetime = "60s"
+
+[redis]
+addr = "localhost:6379"
+auth = ""
+
+[login]
+#教师登录验证码
+teacher_login_code = ["B3dE", "XY7Z"]
+
+
+[secret]
+keti-3 = "JYTFGFJUYT9#Q7d"
+
+[service.base-video-svc]
+host = "http://base-video-service-svc"
+timeout = "5s"
+
+[service.user-host]
+host = "https://gtcice.bnu.edu.cn"
+timeout = "5s"

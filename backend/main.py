@@ -63,6 +63,13 @@ class UserCreate(BaseModel):
     username: str
     password: str
 
+class UserRegister(BaseModel):
+    username: str
+    school: str
+    student_id: str
+    grade: str
+    password: str
+
 class PasswordChange(BaseModel):
     old_password: str
     new_password: str
@@ -73,7 +80,11 @@ class Token(BaseModel):
 
 class User(BaseModel):
     username: str
+    school: str
+    student_id: str
+    grade: str
     is_active: bool = True
+    created_at: Optional[datetime] = None
 
 # Utility functions
 def make_hashed_password(password: str) -> str:
@@ -85,11 +96,33 @@ async def get_user_from_db(username: str):
     user = await users_collection.find_one({"username": username})
     return user
 
+async def create_user_in_db(user_data: dict):
+    """在MongoDB中创建新用户"""
+    # 检查用户名是否已存在
+    existing_user = await users_collection.find_one({"username": user_data["username"]})
+    if existing_user:
+        return None
+    
+    # 创建用户文档
+    user_doc = {
+        "username": user_data["username"],
+        "school": user_data["school"],
+        "student_id": user_data["student_id"],
+        "grade": user_data["grade"],
+        "password": user_data["password"],
+        "is_active": True,
+        "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow()
+    }
+    
+    result = await users_collection.insert_one(user_doc)
+    return result.inserted_id
+
 async def update_user_password(username: str, new_password_hash: str):
     """更新用户密码"""
     await users_collection.update_one(
         {"username": username},
-        {"$set": {"password": new_password_hash}}
+        {"$set": {"password": new_password_hash, "updated_at": datetime.utcnow()}}
     )
 
 def check_password(password: str, hashed_password: str) -> bool:
@@ -146,9 +179,72 @@ async def login(user_data: UserLogin):
     )
     return {"access_token": access_token, "token_type": "bearer"}
 
+@app.post("/api/auth/register")
+async def register_user(user_data: UserRegister):
+    """用户注册"""
+    # 验证输入数据
+    if not user_data.username.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="用户名不能为空"
+        )
+    
+    if not user_data.password.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="密码不能为空"
+        )
+    
+    if len(user_data.password) < 6:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="密码长度至少6位"
+        )
+    
+    # 哈希密码
+    hashed_password = make_hashed_password(user_data.password)
+    
+    # 准备用户数据
+    user_dict = {
+        "username": user_data.username.strip(),
+        "school": user_data.school.strip(),
+        "student_id": user_data.student_id.strip(),
+        "grade": user_data.grade.strip(),
+        "password": hashed_password
+    }
+    
+    # 创建用户
+    user_id = await create_user_in_db(user_dict)
+    if user_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="用户名已存在"
+        )
+    
+    return {
+        "message": "用户注册成功",
+        "user_id": str(user_id),
+        "username": user_data.username
+    }
+
 @app.get("/api/auth/me", response_model=User)
 async def read_users_me(current_user: str = Depends(verify_token)):
-    return User(username=current_user)
+    # 从数据库获取完整用户信息
+    user = await get_user_from_db(current_user)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="用户不存在"
+        )
+    
+    return User(
+        username=user["username"],
+        school=user.get("school", ""),
+        student_id=user.get("student_id", ""),
+        grade=user.get("grade", ""),
+        is_active=user.get("is_active", True),
+        created_at=user.get("created_at")
+    )
 
 @app.post("/api/auth/change-password")
 async def change_password(
