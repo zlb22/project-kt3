@@ -75,11 +75,19 @@ export async function upload (e: { img:File , audio:File}, uploadDir: string, ax
       config.authProgress = Math.min(98, Math.floor(p * 98))
     })
 
-    if (resp.status !== 200 || resp.data.errcode !== 0) {
-      throw new Error(resp.data?.errmsg || '上传失败')
+    const body = resp.data as any
+    const ok = resp.status === 200 && (
+      (typeof body?.errcode !== 'undefined' ? body.errcode === 0 : body?.code === 0)
+    )
+    if (!ok) {
+      // 打印一条简要日志便于定位
+      console.log('upload response:', resp.status, body)
+      const msg = body?.errmsg || body?.message || '上传失败'
+      throw new Error(msg)
     }
 
-    const { imgUrl, audioUrl } = resp.data.data || {}
+    const payload = body?.data || body?.result || {}
+    const { imgUrl, audioUrl } = payload
     if (!imgUrl && !audioUrl) throw new Error('后端未返回文件 URL')
     return { imgUrl, audioUrl }
   } catch (err) {

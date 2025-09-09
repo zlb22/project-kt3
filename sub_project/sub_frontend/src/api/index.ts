@@ -1,4 +1,5 @@
 import { apiInstance } from '@/utils/axios'
+import type { AxiosProgressEvent } from 'axios'
 
 /**
  * 获取配置
@@ -30,7 +31,7 @@ export const getOssAuth = (body?: any) => {
 /**
  * 通过后端代理上传（避免浏览器直传 MinIO 的 CORS 问题）
  */
-export const uploadToServer = (form: FormData, onUploadProgress?: (e: ProgressEvent) => void) => {
+export const uploadToServer = (form: FormData, onUploadProgress?: (e: AxiosProgressEvent) => void) => {
   return apiInstance.post('/web/keti3/oss/upload', form, {
     headers: { 'Content-Type': 'multipart/form-data' },
     onUploadProgress

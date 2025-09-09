@@ -109,6 +109,15 @@ class LogSaveReq(BaseModel):
     action: str
     details: Optional[str] = None
 
+# Keti3 specific log save payload compatible with frontend
+class Keti3LogSaveReq(BaseModel):
+    uid: int
+    op_type: Optional[str] = None
+    voice_url: Optional[str] = None
+    screenshot_url: Optional[str] = None
+    op_time: Optional[str] = None
+    data_after: Optional[dict | list | str] = None
+
 # Utility functions
 def make_hashed_password(password: str) -> str:
     return hashlib.sha256(str.encode(password)).hexdigest()
@@ -636,20 +645,32 @@ async def keti3_oss_upload(request: Request, img: UploadFile = File(None), audio
         print(f"Traceback: {traceback.format_exc()}")
         return error(ERRCODE_COMMON_ERROR, f"Upload failed: {str(e)}")
 
+@app.options("/web/keti3/log/save")
+async def keti3_log_save_options():
+    return {}
+
 @app.post("/web/keti3/log/save")
-async def keti3_log_save(request: Request, req: LogSaveReq, db: Session = Depends(get_db)):
-    """Save operation log"""
+async def keti3_log_save(request: Request, req: Keti3LogSaveReq, db: Session = Depends(get_db)):
+    """Save operation log compatible with frontend payload"""
     verify_signature(request)
-    
     try:
+        details_obj = {
+            "voice_url": req.voice_url,
+            "screenshot_url": req.screenshot_url,
+            "op_time": req.op_time,
+            "data_after": req.data_after,
+        }
+        # 仅保留有值的键
+        details_obj = {k: v for k, v in details_obj.items() if v is not None}
+        details_str = json.dumps(details_obj, ensure_ascii=False) if details_obj else None
+
         log_entry = OperationLog(
             uid=req.uid,
-            action=req.action,
-            details=req.details
+            action=(req.op_type or "submit"),
+            details=details_str
         )
         db.add(log_entry)
         db.commit()
-        
         return keti3_response(data={"message": "Log saved successfully"})
     except Exception as e:
         return error(ERRCODE_COMMON_ERROR, f"Log save failed: {str(e)}")

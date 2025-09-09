@@ -34,7 +34,9 @@ const confirm = () => {
         op_time: new Date().toISOString(),
         data_after: operationHistory.operationLog
       }).then(result=>{
-        if(result.data.errcode===0){
+        const body:any = result?.data || {}
+        const ok = (typeof body.errcode !== 'undefined') ? body.errcode === 0 : body.code === 0
+        if(ok){
           setConfig(100)
         }
       }).catch(err=>{
