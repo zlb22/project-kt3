@@ -27,11 +27,12 @@ const confirm = () => {
       (res: any) => {
         // const origin=window.location.origin
         saveData({
-        log_list:operationHistory.operationLog,
-        uid:fileStore.uid,
-        voice_url:res.audioUrl,
-        screenshot_url:res.imgUrl,
-        op_time:operationHistory.stayOperaDur
+        uid: fileStore.uid,
+        op_type: 'submit',
+        voice_url: res.audioUrl,
+        screenshot_url: res.imgUrl,
+        op_time: new Date().toISOString(),
+        data_after: operationHistory.operationLog
       }).then(result=>{
         if(result.data.errcode===0){
           setConfig(100)

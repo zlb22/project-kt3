@@ -1,6 +1,8 @@
 import { fileURLToPath, URL } from 'node:url'
 
 import { defineConfig } from 'vite'
+import fs from 'node:fs'
+import path from 'node:path'
 import vue from '@vitejs/plugin-vue'
 import vueJsx from '@vitejs/plugin-vue-jsx'
 import Components from 'unplugin-vue-components/vite'
@@ -24,6 +26,11 @@ export default defineConfig({
     }
   },
   server: {
+    host: true,
+    https: {
+      key: fs.readFileSync(path.resolve(__dirname, '../../certs/server.key')),
+      cert: fs.readFileSync(path.resolve(__dirname, '../../certs/server.crt')),
+    },
     proxy: {
       // 配置代理（只在本地开发有效，上线无效）
       '/web/keti3': {

@@ -30,6 +30,14 @@
         autoplay
         @ended="vedioEnd"
       ></video>
+      <!-- 跳过按钮 -->
+      <div
+        class="skip-button"
+        :style="{ position: 'absolute', background: 'rgba(255, 255, 255, 0.9)', color: '#333', top: '50px', right: '50px', width: '120px', height: '50px', fontSize: '18px', borderRadius: '25px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', zIndex: 10000, border: '2px solid #7A62F5' }"
+        @click="skipVideo"
+      >
+        跳过视频
+      </div>
       <div
         class="vedio-button"
         :style="{ ...startBtnStyle, background: !btnAbled ? 'gray' : 'rgba(122, 98, 245, 1)' }"
@@ -46,14 +54,12 @@
           <li :style="inputLiStyle">
             学校：
             <div class="inputTextBox" :style="inputTextBoxStyle">
-              <!-- 绑定school_id值 -->
-              <select :style="selectStyle" v-model="userInfo.school_id">
-                <option value="0">请选择</option>
-                <!-- 遍历获取到的学校列表  -->
-                <option :value="item.id" v-for="item in list.school" :key="item.id">
-                  {{ item.name }}
-                </option>
-              </select>
+              <input
+                type="text"
+                placeholder="请输入学校名称"
+                :style="inputTextStyle"
+                v-model="userInfo.school"
+              />
             </div>
           </li>
           <li :style="inputLiStyle">
@@ -81,12 +87,12 @@
           <li :style="inputLiStyle">
             年级：
             <div class="inputTextBox" :style="inputTextBoxStyle">
-              <select :style="selectStyle" v-model="userInfo.grade_id">
-                <option value="0">请选择</option>
-                <option :value="item.id" v-for="item in list.grade" :key="item.id">
-                  {{ item.name }}
-                </option>
-              </select>
+              <input
+                type="text"
+                placeholder="请输入年级"
+                :style="inputTextStyle"
+                v-model="userInfo.grade"
+              />
             </div>
           </li>
           <li :style="inputLiStyle">
@@ -137,18 +143,18 @@ interface List {
 const list = computed(() => fileStore.list as List)
 
 const userInfo = ref({
-  school_id: 0,
+  school: '',
   name: '',
   num: '',
-  grade_id: 0,
+  grade: '',
   class: ''
 })
 const comfirmStatus = computed(
   () =>
-    userInfo.value.school_id !== 0 &&
+    userInfo.value.school !== '' &&
     userInfo.value.name !== '' &&
     userInfo.value.num !== '' &&
-    userInfo.value.grade_id !== 0 &&
+    userInfo.value.grade !== '' &&
     userInfo.value.class !== ''
 )
 let logoWidth = ref(0)
@@ -262,6 +268,9 @@ const start = () => {
 const vedioEnd = () => {
   btnAbled.value = true
 }
+const skipVideo = () => {
+  btnAbled.value = true
+}
 const nextStep = () => {
   if (!btnAbled.value) return
   vedioShow.value = false
@@ -271,11 +280,9 @@ const confirm = async () => {
   if (!comfirmStatus.value) return
   const loginData = {
     // 登录参数配置
-    school_id: userInfo.value.school_id,
-    student_name: userInfo.value.name,
-    student_num: userInfo.value.num,
-    grade_id: userInfo.value.grade_id,
-    class_name: userInfo.value.class
+    username: userInfo.value.name,
+    school: userInfo.value.school,
+    grade: userInfo.value.grade
   }
   // const loginUrl = `${origin}/web/keti3/student/login` // 登录接口
   try {

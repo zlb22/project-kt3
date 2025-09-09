@@ -8,8 +8,12 @@ import { getUrlParam } from '@/utils/url'
 export class Interceptors {
   instance: AxiosInstance
   constructor() {
+    const protocol = window.location.protocol; // 'http:' or 'https:'
+    const host = window.location.hostname;
+    // Backend uses 8000 for HTTP and 8443 for HTTPS
+    const backendPort = protocol === 'https:' ? 8443 : 8000;
     this.instance = axios.create({
-      baseURL: '',
+      baseURL: `${protocol}//${host}:${backendPort}`,
       timeout: 10000
     })
     this.init()
@@ -27,9 +31,9 @@ export class Interceptors {
         const body = JSON.stringify(config.data)
         const header = getHeader(body)
         Object.assign(config.headers, {
-          'X-Auth-AppId': header.appId,
-          'X-Auth-TimeStamp': header.timeStamp,
-          'X-Sign': header.sign
+          'appId': header.appId,
+          'timestamp': header.timeStamp,
+          'signature': header.sign
         })
         return config
       },

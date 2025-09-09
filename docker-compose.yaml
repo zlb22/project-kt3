@@ -1,0 +1,50 @@
+services:
+  mongodb:
+    image: crpi-dlnnpwzauw4wdv4n.cn-hangzhou.personal.cr.aliyuncs.com/ack22/mongodb-community-server:latest
+    container_name: mongodb
+    ports:
+      - "27017:27017"  # 对外暴露 MongoDB
+    volumes:
+      - mongo_data:/data/db
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_ROOT_USER}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_ROOT_PASSWORD}
+    restart: unless-stopped
+
+  minio:
+    image: crpi-dlnnpwzauw4wdv4n.cn-hangzhou.personal.cr.aliyuncs.com/ack22/minio:latest
+    container_name: minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+      # 新增两行：将项目内证书绑定到 MinIO 证书目录（文件名必须是 public.crt / private.key）
+      - ./certs/server.crt:/root/.minio/certs/public.crt:ro
+      - ./certs/server.key:/root/.minio/certs/private.key:ro
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+    command: server /data --console-address ":9001"
+    restart: unless-stopped
+
+  mysql:
+    image: crpi-dlnnpwzauw4wdv4n.cn-hangzhou.personal.cr.aliyuncs.com/ack22/mysql:oraclelinux9
+    container_name: mysql
+    ports:
+      - "3306:3306"  # 对外暴露 MySQL
+    volumes:
+      - mysql_data:/var/lib/mysql
+    environment:
+      - TZ=Asia/Shanghai
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+      - MYSQL_DATABASE=kt3
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_0900_ai_ci
+    restart: unless-stopped
+
+volumes:
+  mongo_data:
+  minio_data:
+  mysql_data:

@@ -24,7 +24,17 @@ export const saveData = (body?: any) => {
  * @returns 
  */
 export const getOssAuth = (body?: any) => {
-  return apiInstance.post('/********', body)
+  return apiInstance.post('/web/keti3/oss/auth', body)
+}
+
+/**
+ * 通过后端代理上传（避免浏览器直传 MinIO 的 CORS 问题）
+ */
+export const uploadToServer = (form: FormData, onUploadProgress?: (e: ProgressEvent) => void) => {
+  return apiInstance.post('/web/keti3/oss/upload', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    onUploadProgress
+  })
 }
 
 
