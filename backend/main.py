@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, Request, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, Depends, Request, UploadFile, File, Form, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
@@ -17,7 +17,7 @@ from minio import Minio
 from minio.error import S3Error
 import io
 from sqlalchemy.orm import Session
-from db_mysql import get_db, Student, OperationLog, TwentyFourRecord, create_tables
+from db_mysql import get_db, Student, OperationLog, TwentyFourRecord, VideoAsset, create_tables
 from keti3_middleware import verify_signature, keti3_response, error, ERRCODE_COMMON_ERROR, ERRCODE_INVALID_PARAMS
 from keti3_storage import get_minio_client, ensure_bucket, presign_put_object
 
@@ -49,16 +49,7 @@ security = HTTPBearer()
 # Initialize MySQL tables
 create_tables()
 
-# Legacy MongoDB client (kept for backward compatibility in other modules if needed)
-try:
-    from motor.motor_asyncio import AsyncIOMotorClient
-    client = AsyncIOMotorClient(MONGODB_URL)
-    db = client[DATABASE_NAME]
-    users_collection = db.users
-except Exception:
-    client = None
-    db = None
-    users_collection = None
+# Removed legacy MongoDB client and collections; switched to MySQL-only metadata storage
 
 # CORS middleware
 app.add_middleware(
@@ -164,12 +155,7 @@ def update_student_password_mysql(db: Session, username: str, new_password_hash:
     db.commit()
     return True
 
-async def update_user_password(username: str, new_password_hash: str):
-    """更新用户密码"""
-    await users_collection.update_one(
-        {"username": username},
-        {"$set": {"password": new_password_hash, "updated_at": datetime.utcnow()}}
-    )
+# Removed legacy MongoDB password update helper
 
 def check_password(password: str, hashed_password: str) -> bool:
     return make_hashed_password(password) == hashed_password
@@ -356,7 +342,8 @@ async def upload_video(
     video_type: str = Form(...),  # "camera" or "screen"（自动纠正拼写）
     test_session_id: str = Form(...),
     bucket: Optional[str] = Form(None),
-    current_user: str = Depends(verify_token)
+    current_user: str = Depends(verify_token),
+    db: Session = Depends(get_db),
 ):
     """Upload recorded video files to MinIO (bucket/<camera|screen>/filename)."""
     try:
@@ -380,9 +367,14 @@ async def upload_video(
         # 生成文件名（使用纠正后的 folder 名称）
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"{current_user}_{test_session_id}_{folder}_{timestamp}.webm"
-        object_name = f"{folder}/{filename}"
+        # 先解析并写入 MySQL 元数据需要的 uid，因此在命名前先定位学生
+        student = get_student_by_username(db, current_user)
+        if not student:
+            raise HTTPException(status_code=404, detail="当前用户未找到")
+        # 每个 uid 单独文件夹，结构：<camera|screen>/<uid>/<test_session_id>/<filename>
+        object_name = f"{folder}/{student.id}/{test_session_id}/{filename}"
 
-        # 读取内容
+        # 读取内容（当前为一次性读取；后续可切换为临时文件/流式上传以降低内存峰值）
         content = await file.read()
 
         # 解析目标 bucket（表单优先，其次环境变量）
@@ -395,19 +387,13 @@ async def upload_video(
         if MINIO_ALLOWED_BUCKETS and target_bucket not in MINIO_ALLOWED_BUCKETS:
             raise HTTPException(status_code=403, detail=f"不允许的 bucket: {target_bucket}")
 
-        # 初始化 MinIO 客户端
-        parsed = urlparse(MINIO_URL)
-        if not parsed.scheme or not parsed.netloc:
-            raise HTTPException(status_code=500, detail="MINIO_URL 配置无效")
-        secure = parsed.scheme == "https"
-        endpoint = parsed.netloc
-        client = Minio(endpoint, access_key=MINIO_ACCESS_KEY, secret_key=MINIO_SECRET_KEY, secure=secure)
+        # 初始化 MinIO 客户端（支持自签名/配置化 SSL）
+        client = get_minio_client()
 
         # 确保 bucket 存在
         try:
-            if not client.bucket_exists(target_bucket):
-                client.make_bucket(target_bucket)
-        except S3Error as e:
+            ensure_bucket(client, target_bucket)
+        except Exception as e:
             raise HTTPException(status_code=500, detail=f"检查/创建 bucket 失败: {e}")
 
         # 上传到 MinIO
@@ -436,6 +422,23 @@ async def upload_video(
             "file_path": f"minio://{target_bucket}/{object_name}",
         }
 
+        # 解析并写入 MySQL 元数据（按 uid 索引）
+        public_base = f"{MINIO_URL}/{target_bucket}"
+        public_url = f"{public_base}/{object_name}"
+        asset = VideoAsset(
+            uid=student.id,
+            username=current_user,
+            test_session_id=test_session_id,
+            video_type=folder,
+            bucket=target_bucket,
+            object_name=object_name,
+            content_type=file.content_type,
+            file_size=len(content),
+        )
+        db.add(asset)
+        db.commit()
+        db.refresh(asset)
+
         # 保存上传记录到JSON文件
         uploads_log_file = os.path.join(UPLOAD_DIR, "uploads_log.json")
         uploads_log = []
@@ -459,6 +462,9 @@ async def upload_video(
             "file_path": upload_info["file_path"],
             "test_session_id": test_session_id,
             "upload_time": upload_info["upload_time"],
+            "uid": student.id,
+            "id": asset.id,
+            "public_url": public_url,
         }
 
     except HTTPException:
@@ -466,38 +472,68 @@ async def upload_video(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"文件上传失败: {str(e)}")
 
+# Removed legacy MongoDB-based 24pt submit endpoint; use MySQL-based endpoints below instead
+
 @app.post("/api/tests/24point/submit")
 async def submit_24point_test(
     test_data: dict,
-    current_user: str = Depends(verify_token)
+    current_user: str = Depends(verify_token),
+    db: Session = Depends(get_db),
 ):
-    """Submit 24-point test results and persist to MongoDB with video meta references."""
+    """Submit 24-point test results and persist to MySQL (twentyfour_records) with video meta references.
+    Compatible with old frontend that posts to /api/tests/24point/submit.
+    """
     try:
-        # 构造文档
+        # Assemble document
         doc = dict(test_data or {})
         doc["user"] = current_user
         doc.setdefault("test_id", "24point")
         doc["submit_time"] = datetime.now().isoformat()
 
-        # videos 字段如果存在，确保是列表，元素推荐包含：
-        # {type, bucket, object_name, file_path, file_size, content_type}
-        vids = doc.get("videos")
-        if vids is not None and not isinstance(vids, list):
-            doc["videos"] = [vids]
+        # 绑定 uid
+        stu = get_student_by_username(db, current_user)
+        if not stu:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
 
-        # 入库到 test_results 集合
-        result = await db.onlineclass.insert_one(doc)
+        # 合并视频元数据：按 uid + test_session_id 查询 VideoAsset，写入 doc['videos']
+        tsid = doc.get("test_session_id") or doc.get("session_id")
+        videos_list = []
+        if tsid:
+            q = (
+                db.query(VideoAsset)
+                .filter(VideoAsset.uid == stu.id, VideoAsset.test_session_id == tsid)
+                .order_by(VideoAsset.upload_time.asc())
+            )
+            for a in q.all():
+                public_url = f"{MINIO_URL}/{a.bucket}/{a.object_name}"
+                videos_list.append({
+                    "type": a.video_type,
+                    "bucket": a.bucket,
+                    "object_name": a.object_name,
+                    "public_url": public_url,
+                    "file_size": a.file_size,
+                    "content_type": a.content_type,
+                    "upload_time": a.upload_time.isoformat() if a.upload_time else None,
+                })
+        doc["videos"] = videos_list
+
+        payload_text = json.dumps(doc, ensure_ascii=False)
+        rec = TwentyFourRecord(uid=stu.id, payload=payload_text)
+        db.add(rec)
+        db.commit()
+        db.refresh(rec)
 
         return {
             "message": "测试结果提交成功",
-            "id": str(result.inserted_id),
+            "id": rec.id,
             "submit_time": doc["submit_time"],
             "user": current_user,
             "test_id": doc.get("test_id", "24point"),
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"测试结果提交失败: {str(e)}")
-
 # Keti3 API Endpoints
 @app.options("/web/keti3/student/login")
 async def keti3_student_login_options():

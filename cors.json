@@ -1,7 +1,7 @@
 [
   {
     "AllowedMethod": ["PUT", "GET", "POST", "HEAD"],
-    "AllowedOrigin": ["https://172.25.83.83:5173", "https://localhost:5173"],
+    "AllowedOrigin": ["https://172.24.245.99:5173", "https://localhost:5173"],
     "AllowedHeader": ["*"],
     "ExposeHeader": ["ETag"],
     "MaxAgeSeconds": 3000

@@ -45,6 +45,20 @@ class TwentyFourRecord(Base):
     payload = Column(Text, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
+class VideoAsset(Base):
+    __tablename__ = "video_assets"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    uid = Column(Integer, nullable=False, index=True)
+    username = Column(String(50), nullable=False, index=True)
+    test_session_id = Column(String(100), nullable=False, index=True)
+    video_type = Column(String(20), nullable=False, index=True)  # camera | screen
+    bucket = Column(String(100), nullable=False)
+    object_name = Column(String(512), nullable=False)
+    content_type = Column(String(100), nullable=True)
+    file_size = Column(BigInteger, nullable=False, default=0)
+    upload_time = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
 # Create tables
 def create_tables():
     Base.metadata.create_all(bind=engine)

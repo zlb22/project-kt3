@@ -886,7 +886,7 @@ const TwentyFourGame: React.FC<TwentyFourGameProps> = ({ onBack }) => {
       
     } catch (error) {
       console.error('视频上传失败:', error);
-      return { success: false, error: error };
+      return { success: false, error: error, sessionId: testSessionId };
     }
   };
 
@@ -988,13 +988,14 @@ const TwentyFourGame: React.FC<TwentyFourGameProps> = ({ onBack }) => {
           file_size: r.file_size,
           content_type: r.content_type,
           upload_time: r.upload_time,
+          public_url: r.public_url,
           test_session_id: r.test_session_id,
         }));
         await saveTestResults(videosMeta, uploadResult.sessionId);
       } else {
         console.error('视频上传失败:', uploadResult.error);
-        // 即便视频失败，也提交测试结果（无视频引用）
-        await saveTestResults([], undefined);
+        // 即便视频失败，也提交测试结果（无视频引用），但仍携带 sessionId 便于后端按会话查询已存在的视频
+        await saveTestResults([], uploadResult.sessionId);
       }
     }, 2000);
   };

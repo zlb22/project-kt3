@@ -24,7 +24,7 @@
     "recharts": "^2.8.0"
   },
   "scripts": {
-    "start": "react-scripts start",
+    "start": "HOST=0.0.0.0 PORT=3000 react-scripts start",
     "start-https": "NODE_TLS_REJECT_UNAUTHORIZED=0 HTTPS=true SSL_CRT_FILE=../certs/server.crt SSL_KEY_FILE=../certs/server.key react-scripts start",
     "build": "react-scripts build",
     "test": "react-scripts test",

@@ -1,6 +1,6 @@
 <CORSConfiguration>
   <CORSRule>
-    <AllowedOrigin>https://172.25.83.83:5173</AllowedOrigin>
+    <AllowedOrigin>https://172.24.245.99:5173</AllowedOrigin>
     <AllowedMethod>PUT</AllowedMethod>
     <AllowedHeader>*</AllowedHeader>
   </CORSRule>
