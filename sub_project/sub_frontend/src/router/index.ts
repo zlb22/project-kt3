@@ -8,6 +8,15 @@ const router = createRouter({
       path: '/',
       name: 'home', 
       component: HomeView
+    },
+    {
+      path: '/topic-three',
+      name: 'topic-three',
+      component: HomeView
+    },
+    {
+      path: '/:pathMatch(.*)*',
+      redirect: '/topic-three'
     }
   ]
 })

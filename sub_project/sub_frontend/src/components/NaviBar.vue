@@ -26,6 +26,9 @@
       </div>
     </div>
     <div class="tail">
+      <div class="home-btn btn" @click="goHome">
+        返回主页
+      </div>
       <Countdown class="count-down-wrapper" v-show="!workspaceStore.showRecord"></Countdown>
 
       <div
@@ -117,6 +120,13 @@ const commit = () => {
     fileStore.setConfirmCommitStatus(true)
   }
 }
+
+// Navigate back to the main frontend dashboard (port 3000)
+const goHome = () => {
+  const host = window.location.hostname
+  const url = `http://${host}:3000/dashboard`
+  window.location.href = url
+}
 </script>
 <style scoped lang="scss">
 .btn {
@@ -203,6 +213,13 @@ const commit = () => {
   .tail {
     display: flex;
     align-items: center;
+    .home-btn {
+      margin-right: 12px;
+      color: rgba(122, 98, 245, 1);
+      font-size: 18px;
+      font-weight: 400;
+      background: rgba(122, 98, 245, 0.12);
+    }
     .finsh-btn {
       font-size: 24px;
       font-weight: 400;

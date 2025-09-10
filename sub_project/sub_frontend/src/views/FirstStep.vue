@@ -47,7 +47,8 @@
       </div>
     </div>
 
-    <div class="info-input-view" v-if="startInputInfo">
+    <!-- Manual info input disabled due to unified login; keep block hidden -->
+    <div class="info-input-view" v-if="false">
       <div class="input-container" :style="inputContainerStyle">
         <div class="input-title" :style="inputTitleStyle">请输入你的信息</div>
         <ul>
@@ -121,7 +122,7 @@
 s
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import axios from 'axios'
+import { apiInstance } from '@/utils/axios'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useFileStore } from '@/stores/files'
 import { getUrlParam } from '@/utils/url'
@@ -274,27 +275,31 @@ const skipVideo = () => {
 const nextStep = () => {
   if (!btnAbled.value) return
   vedioShow.value = false
-  startInputInfo.value = true
+  // Directly enter step 2 since user info is taken from unified login
+  workspaceStore.setStep(2)
 }
-const confirm = async () => {
-  if (!comfirmStatus.value) return
-  const loginData = {
-    // 登录参数配置
-    username: userInfo.value.name,
-    school: userInfo.value.school,
-    grade: userInfo.value.grade
-  }
-  // const loginUrl = `${origin}/web/keti3/student/login` // 登录接口
+// On mount, auto-fetch unified user info and login to acquire uid
+onMounted(async () => {
   try {
-    const result = await login(loginData)
-  // const result = await axios.post(loginUrl, loginData)
-    fileStore.setUid(result.data.data.uid)
-    workspaceStore.setStep(2) // 仅在成功后更新步骤
-  } catch (err) {
-    // 处理错误
-    console.error('登录失败:', err)
+    const me = await apiInstance.get('/api/auth/me')
+    const body = me?.data
+    if (body && body.username) {
+      const loginData = {
+        username: body.username,
+        school: body.school || '',
+        grade: body.grade || ''
+      }
+      try {
+        const result = await login(loginData)
+        fileStore.setUid(result.data.data.uid)
+      } catch (e) {
+        console.error('keti3 student login failed:', e)
+      }
+    }
+  } catch (e) {
+    console.error('fetch /api/auth/me failed:', e)
   }
-}
+})
 </script>
 <style scoped lang="scss">
 .start-view {

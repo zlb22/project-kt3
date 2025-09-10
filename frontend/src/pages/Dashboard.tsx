@@ -54,7 +54,20 @@ const Dashboard: React.FC = () => {
         navigate('/problem-solving');
         break;
       case 'interactive_discussion':
-        navigate('/interactive-discussion');
+        // Redirect to backend adapter which upserts student and redirects to sub_project with token
+        try {
+          const protocol = window.location.protocol; // 'http:' or 'https:'
+          const host = window.location.hostname;
+          const backendPort = protocol === 'https:' ? 8443 : 8000;
+          const base = `${protocol}//${host}:${backendPort}`;
+          const username = encodeURIComponent(user?.username || '');
+          const school = encodeURIComponent((user as any)?.school || '');
+          const grade = encodeURIComponent((user as any)?.grade || '');
+          const url = `${base}/web/keti3/entry?username=${username}&school=${school}&grade=${grade}`;
+          window.location.href = url;
+        } catch (e) {
+          console.error('Redirect to online experiment failed:', e);
+        }
         break;
       case 'online_class':
         navigate('/online-class');

@@ -122,7 +122,7 @@ const Register: React.FC = () => {
           
           <form onSubmit={handleSubmit}>
             <Grid container spacing={2}>
-              <Grid item xs={12} sm={6}>
+              <Grid item xs={12} sm={12}>
                 <TextField
                   fullWidth
                   label="用户名"
@@ -135,7 +135,7 @@ const Register: React.FC = () => {
                 />
               </Grid>
               
-              <Grid item xs={12} sm={6}>
+              <Grid item xs={12} sm={12}>
                 <TextField
                   fullWidth
                   label="学校"
@@ -148,7 +148,7 @@ const Register: React.FC = () => {
                 />
               </Grid>
               
-              <Grid item xs={12} sm={6}>
+              <Grid item xs={12} sm={12}>
                 <TextField
                   fullWidth
                   label="学号"
@@ -161,7 +161,7 @@ const Register: React.FC = () => {
                 />
               </Grid>
               
-              <Grid item xs={12} sm={6}>
+              <Grid item xs={12} sm={12}>
                 <TextField
                   fullWidth
                   label="年级"
@@ -175,7 +175,7 @@ const Register: React.FC = () => {
                 />
               </Grid>
               
-              <Grid item xs={12} sm={6}>
+              <Grid item xs={12} sm={12}>
                 <TextField
                   fullWidth
                   label="密码"
@@ -190,7 +190,7 @@ const Register: React.FC = () => {
                 />
               </Grid>
               
-              <Grid item xs={12} sm={6}>
+              <Grid item xs={12} sm={12}>
                 <TextField
                   fullWidth
                   label="确认密码"

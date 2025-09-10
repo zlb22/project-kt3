@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, Depends, Request, UploadFile, File, Form
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 import jwt
 import hashlib
@@ -11,14 +11,13 @@ from datetime import datetime, timedelta
 import io
 from typing import Optional, List
 import uvicorn
-from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import load_dotenv
 from urllib.parse import urlparse
 from minio import Minio
 from minio.error import S3Error
 import io
 from sqlalchemy.orm import Session
-from db_mysql import get_db, Student, OperationLog, create_tables
+from db_mysql import get_db, Student, OperationLog, TwentyFourRecord, create_tables
 from keti3_middleware import verify_signature, keti3_response, error, ERRCODE_COMMON_ERROR, ERRCODE_INVALID_PARAMS
 from keti3_storage import get_minio_client, ensure_bucket, presign_put_object
 
@@ -30,7 +29,7 @@ SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
 
-# MongoDB Configuration
+# MongoDB Configuration (legacy; not used for /api/auth/* anymore)
 MONGODB_URL = os.getenv("MONGODB_URL", "mongodb://localhost:27017")
 DATABASE_NAME = os.getenv("DATABASE_NAME", "project-kt3")
 
@@ -39,6 +38,8 @@ MINIO_URL = os.getenv("MINIO_URL", "http://localhost:9000")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
 MINIO_BUCKET_NAME = os.getenv("MINIO_BUCKET_NAME", "onlineclass")
+# Dedicated bucket for Keti3 "在线实验" sub-project (uploads, assets)
+MINIO_BUCKET_KETI3 = os.getenv("MINIO_BUCKET_KETI3", os.getenv("MINIO_BUCKET", "online-experiment"))
 # 可选：限制允许的 bucket，逗号分隔；为空则不限制
 MINIO_ALLOWED_BUCKETS = [b.strip() for b in os.getenv("MINIO_ALLOWED_BUCKETS", "").split(",") if b.strip()]
 
@@ -48,10 +49,16 @@ security = HTTPBearer()
 # Initialize MySQL tables
 create_tables()
 
-# MongoDB client
-client = AsyncIOMotorClient(MONGODB_URL)
-db = client[DATABASE_NAME]
-users_collection = db.users
+# Legacy MongoDB client (kept for backward compatibility in other modules if needed)
+try:
+    from motor.motor_asyncio import AsyncIOMotorClient
+    client = AsyncIOMotorClient(MONGODB_URL)
+    db = client[DATABASE_NAME]
+    users_collection = db.users
+except Exception:
+    client = None
+    db = None
+    users_collection = None
 
 # CORS middleware
 app.add_middleware(
@@ -118,37 +125,44 @@ class Keti3LogSaveReq(BaseModel):
     op_time: Optional[str] = None
     data_after: Optional[dict | list | str] = None
 
+class Save24ptRecordReq(BaseModel):
+    uid: int
+    payload: Optional[dict | list | str] = None
+    payload_str: Optional[str] = None
+
 # Utility functions
 def make_hashed_password(password: str) -> str:
     return hashlib.sha256(str.encode(password)).hexdigest()
 
-# MongoDB user operations
-async def get_user_from_db(username: str):
-    """从MongoDB获取用户信息"""
-    user = await users_collection.find_one({"username": username})
-    return user
+# MySQL user operations (replace legacy Mongo for /api/auth/*)
+def get_student_by_username(db: Session, username: str) -> Student | None:
+    return db.query(Student).filter(Student.username == username).first()
 
-async def create_user_in_db(user_data: dict):
-    """在MongoDB中创建新用户"""
-    # 检查用户名是否已存在
-    existing_user = await users_collection.find_one({"username": user_data["username"]})
-    if existing_user:
+def create_student_mysql(db: Session, username: str, school: str, student_id: str, grade: str, password_hash: str) -> int | None:
+    if get_student_by_username(db, username):
         return None
-    
-    # 创建用户文档
-    user_doc = {
-        "username": user_data["username"],
-        "school": user_data["school"],
-        "student_id": user_data["student_id"],
-        "grade": user_data["grade"],
-        "password": user_data["password"],
-        "is_active": True,
-        "created_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow()
-    }
-    
-    result = await users_collection.insert_one(user_doc)
-    return result.inserted_id
+    stu = Student(
+        username=username.strip(),
+        school=school.strip(),
+        grade=grade.strip(),
+        password=password_hash,
+        is_active=1,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+    )
+    db.add(stu)
+    db.commit()
+    db.refresh(stu)
+    return stu.id
+
+def update_student_password_mysql(db: Session, username: str, new_password_hash: str):
+    stu = get_student_by_username(db, username)
+    if not stu:
+        return False
+    stu.password = new_password_hash
+    stu.updated_at = datetime.utcnow()
+    db.commit()
+    return True
 
 async def update_user_password(username: str, new_password_hash: str):
     """更新用户密码"""
@@ -188,31 +202,52 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+# Adapter entry: upsert student and redirect to sub_project with JWT token
+KETI3_FRONTEND_URL = os.getenv("KETI3_FRONTEND_URL", "https://localhost:5173/topic-three")
+
+@app.get("/web/keti3/entry")
+async def keti3_entry(username: str, school: str = "", grade: str = "", db: Session = Depends(get_db)):
+    """Upsert student into MySQL and redirect to sub_project page with JWT token in query."""
+    # Upsert student by username
+    student = db.query(Student).filter(Student.username == username).first()
+    if not student:
+        student = Student(username=username, school=school or "", grade=grade or "")
+        db.add(student)
+        db.commit()
+        db.refresh(student)
+    else:
+        # Optionally update school/grade if provided
+        updated = False
+        if school and student.school != school:
+            student.school = school
+            updated = True
+        if grade and student.grade != grade:
+            student.grade = grade
+            updated = True
+        if updated:
+            db.commit()
+
+    # Issue JWT using existing helper
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    token = create_access_token(data={"sub": username}, expires_delta=access_token_expires)
+
+    # Redirect to sub_project (token in query)
+    redirect_url = f"{KETI3_FRONTEND_URL}?token={token}"
+    return RedirectResponse(url=redirect_url, status_code=302)
+
 # Authentication endpoints
 @app.post("/api/auth/login", response_model=Token)
-async def login(user_data: UserLogin):
-    # 从MongoDB获取用户信息
-    user = await get_user_from_db(user_data.username)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password"
-        )
-    
-    if not check_password(user_data.password, user["password"]):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password"
-        )
-    
+async def login(user_data: UserLogin, db: Session = Depends(get_db)):
+    """Login via MySQL students table"""
+    stu = get_student_by_username(db, user_data.username)
+    if not stu or not stu.password or not check_password(user_data.password, stu.password):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password")
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        data={"sub": user_data.username}, expires_delta=access_token_expires
-    )
+    access_token = create_access_token(data={"sub": user_data.username}, expires_delta=access_token_expires)
     return {"access_token": access_token, "token_type": "bearer"}
 
 @app.post("/api/auth/register")
-async def register_user(user_data: UserRegister):
+async def register_user(user_data: UserRegister, db: Session = Depends(get_db)):
     """用户注册"""
     # 验证输入数据
     if not user_data.username.strip():
@@ -235,18 +270,15 @@ async def register_user(user_data: UserRegister):
     
     # 哈希密码
     hashed_password = make_hashed_password(user_data.password)
-    
-    # 准备用户数据
-    user_dict = {
-        "username": user_data.username.strip(),
-        "school": user_data.school.strip(),
-        "student_id": user_data.student_id.strip(),
-        "grade": user_data.grade.strip(),
-        "password": hashed_password
-    }
-    
-    # 创建用户
-    user_id = await create_user_in_db(user_dict)
+    # 创建用户（MySQL）
+    user_id = create_student_mysql(
+        db,
+        username=user_data.username,
+        school=user_data.school,
+        student_id=user_data.student_id,
+        grade=user_data.grade,
+        password_hash=hashed_password,
+    )
     if user_id is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -260,46 +292,32 @@ async def register_user(user_data: UserRegister):
     }
 
 @app.get("/api/auth/me", response_model=User)
-async def read_users_me(current_user: str = Depends(verify_token)):
-    # 从数据库获取完整用户信息
-    user = await get_user_from_db(current_user)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="用户不存在"
-        )
-    
+async def read_users_me(current_user: str = Depends(verify_token), db: Session = Depends(get_db)):
+    stu = get_student_by_username(db, current_user)
+    if not stu:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
     return User(
-        username=user["username"],
-        school=user.get("school", ""),
-        student_id=user.get("student_id", ""),
-        grade=user.get("grade", ""),
-        is_active=user.get("is_active", True),
-        created_at=user.get("created_at")
+        username=stu.username,
+        school=stu.school,
+        student_id="",
+        grade=stu.grade,
+        is_active=bool(getattr(stu, "is_active", 1)),
+        created_at=getattr(stu, "created_at", None),
     )
 
 @app.post("/api/auth/change-password")
 async def change_password(
     password_data: PasswordChange,
-    current_user: str = Depends(verify_token)
+    current_user: str = Depends(verify_token),
+    db: Session = Depends(get_db),
 ):
-    # 从MongoDB获取当前用户信息
-    user = await get_user_from_db(current_user)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
-        )
-    
-    if not check_password(password_data.old_password, user["password"]):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Incorrect old password"
-        )
-    
-    # 更新密码到MongoDB
+    stu = get_student_by_username(db, current_user)
+    if not stu or not stu.password or not check_password(password_data.old_password, stu.password):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Incorrect old password")
     new_password_hash = make_hashed_password(password_data.new_password)
-    await update_user_password(current_user, new_password_hash)
+    ok = update_student_password_mysql(db, current_user, new_password_hash)
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update password")
     return {"message": "Password changed successfully"}
 
 # Health check
@@ -564,7 +582,7 @@ async def keti3_oss_auth(request: Request, req: OssAuthReq | None = None):
                 audio_ct = req.content_types.get("audio", audio_ct)
 
         client = get_minio_client()
-        bucket = os.getenv("MINIO_BUCKET", "onlineclass")
+        bucket = os.getenv("MINIO_BUCKET_KETI3", MINIO_BUCKET_KETI3)
         ensure_bucket(client, bucket)
         base_path = os.getenv("MINIO_BASE_PATH", "24game")
         
@@ -674,6 +692,53 @@ async def keti3_log_save(request: Request, req: Keti3LogSaveReq, db: Session = D
         return keti3_response(data={"message": "Log saved successfully"})
     except Exception as e:
         return error(ERRCODE_COMMON_ERROR, f"Log save failed: {str(e)}")
+
+# 24-point big JSON storage endpoints (MySQL)
+@app.post("/api/24pt/record/save")
+async def save_24pt_record(request: Request, req: Save24ptRecordReq, db: Session = Depends(get_db)):
+    """Persist a 24-point record as a big JSON/text payload bound to uid."""
+    verify_signature(request)
+    try:
+        if req.payload is None and (req.payload_str is None or req.payload_str.strip() == ""):
+            return error(ERRCODE_INVALID_PARAMS, "payload is required")
+        payload_text = req.payload_str if req.payload_str not in (None, "") else json.dumps(req.payload, ensure_ascii=False)
+        rec = TwentyFourRecord(uid=req.uid, payload=payload_text)
+        db.add(rec)
+        db.commit()
+        db.refresh(rec)
+        return keti3_response(data={
+            "id": rec.id,
+            "uid": rec.uid,
+            "created_at": rec.created_at.isoformat() if rec.created_at else None
+        })
+    except Exception as e:
+        return error(ERRCODE_COMMON_ERROR, f"Save 24pt record failed: {str(e)}")
+
+@app.get("/api/24pt/record/list")
+async def list_24pt_records(request: Request, uid: int, limit: int = 20, offset: int = 0, db: Session = Depends(get_db)):
+    """List 24-point records for a user, newest first. Payload returned as parsed JSON if possible, otherwise string."""
+    verify_signature(request)
+    try:
+        limit = max(1, min(100, int(limit)))
+        offset = max(0, int(offset))
+        q = db.query(TwentyFourRecord).filter(TwentyFourRecord.uid == uid).order_by(TwentyFourRecord.created_at.desc()).offset(offset).limit(limit)
+        items = []
+        for rec in q.all():
+            payload_value = rec.payload
+            parsed = None
+            try:
+                parsed = json.loads(payload_value)
+            except Exception:
+                parsed = payload_value
+            items.append({
+                "id": rec.id,
+                "uid": rec.uid,
+                "created_at": rec.created_at.isoformat() if rec.created_at else None,
+                "payload": parsed,
+            })
+        return keti3_response(data={"items": items, "limit": limit, "offset": offset})
+    except Exception as e:
+        return error(ERRCODE_COMMON_ERROR, f"List 24pt records failed: {str(e)}")
 
 if __name__ == "__main__":
     host = os.getenv("HOST", "0.0.0.0")
