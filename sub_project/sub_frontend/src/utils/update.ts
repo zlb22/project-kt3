@@ -2,7 +2,7 @@ import type { AxiosResponse } from 'axios'
 import axios from 'axios'
 import { reactive, ref } from 'vue'
 import { useFileStore } from '@/stores/files';
-import { uploadToServer } from '@/api'
+import { uploadToServerWithUid } from '@/api'
 //地区源
 export enum EnumRegion {
   HangZhou = 'oss-cn-xxx',
@@ -68,7 +68,8 @@ export async function upload (e: { img:File , audio:File}, uploadDir: string, ax
     if (e.img) form.append('img', e.img)
     if (e.audio) form.append('audio', e.audio)
 
-    const resp = await uploadToServer(form, (ev) => {
+    const fileStore = useFileStore()
+    const resp = await uploadToServerWithUid(form, fileStore.uid, (ev) => {
       const p = ev.total ? ev.loaded / ev.total : 0
       // 这里是整体表单的进度，按两段各 49% 比例近似映射
       // 为简单起见，整体进度映射到 authProgress，前端展示即可

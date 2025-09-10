@@ -43,7 +43,7 @@ const Login: React.FC = () => {
       <Container maxWidth="sm">
         <Box textAlign="center" mb={4}>
           <Typography variant="h4" component="h1" className="title-text">
-            互动学习场景下创新能力智能化测评工具 V2.0
+            互动学习场景下创新能力智能化测评工具 V3.0
           </Typography>
         </Box>
         
@@ -93,15 +93,12 @@ const Login: React.FC = () => {
           </form>
           
           <Box textAlign="center" mt={2}>
-            <Link to="/change-password" style={{ textDecoration: 'none' }}>
-              <Button variant="text" color="primary">
-                修改密码
-              </Button>
-            </Link>
-            <Box mt={1}>
-              <Typography variant="body2" color="textSecondary">
-                还没有账号？
-              </Typography>
+            <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 2 }}>
+              <Link to="/change-password" style={{ textDecoration: 'none' }}>
+                <Button variant="text" color="primary">
+                  修改密码
+                </Button>
+              </Link>
               <Link to="/register" style={{ textDecoration: 'none' }}>
                 <Button variant="text" color="primary">
                   立即注册

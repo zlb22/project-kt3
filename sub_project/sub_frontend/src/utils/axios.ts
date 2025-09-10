@@ -27,7 +27,12 @@ export class Interceptors {
           window.localStorage.setItem('AuthToken', authToken) 
         }
         const token = window.localStorage.getItem('AuthToken') || ''
-        config.headers['Authorization'] = token
+        if (token) {
+          // Ensure Bearer prefix for FastAPI HTTPBearer
+          config.headers['Authorization'] = token.startsWith('Bearer ')
+            ? token
+            : `Bearer ${token}`
+        }
         const body = JSON.stringify(config.data)
         const header = getHeader(body)
         Object.assign(config.headers, {

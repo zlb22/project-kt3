@@ -106,7 +106,13 @@ async def oss_auth(req: OssAuthReq):
     try:
         # Generate two presigned PUT URLs for image and audio
         client = get_minio_client()
-        bucket = os.getenv("MINIO_BUCKET", os.getenv("MINIO_BUCKET_NAME", "onlineclass"))
+        # Prefer dedicated Keti3 bucket if provided
+        bucket = (
+            os.getenv("MINIO_BUCKET_KETI3")
+            or os.getenv("MINIO_BUCKET")
+            or os.getenv("MINIO_BUCKET_NAME")
+            or "onlineclass"
+        )
         ensure_bucket(client, bucket)
         base_path = os.getenv("MINIO_BASE_PATH", "24game")
     except Exception as e:
@@ -297,7 +303,12 @@ async def log_export(uid: int, db: Session = Depends(get_db)):
         zf.write(xlsx_path, _os.path.basename(xlsx_path))
 
     client = get_minio_client()
-    bucket = os.getenv("MINIO_BUCKET", os.getenv("MINIO_BUCKET_NAME", "onlineclass"))
+    bucket = (
+        os.getenv("MINIO_BUCKET_KETI3")
+        or os.getenv("MINIO_BUCKET")
+        or os.getenv("MINIO_BUCKET_NAME")
+        or "onlineclass"
+    )
     ensure_bucket(client, bucket)
     base_path = os.getenv("MINIO_BASE_PATH", "24game")
     object_name = f"{base_path}/export/{uid}/op_log_{uid}_{int(datetime.utcnow().timestamp())}.zip"

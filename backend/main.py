@@ -628,9 +628,9 @@ async def keti3_oss_upload(request: Request, img: UploadFile = File(None), audio
 
     try:
         client = get_minio_client()
-        bucket = os.getenv("MINIO_BUCKET", "onlineclass")
+        bucket = os.getenv("MINIO_BUCKET_KETI3", "online-experiment")
         ensure_bucket(client, bucket)
-        base_path = os.getenv("MINIO_BASE_PATH", "24game")
+        base_path = os.getenv("MINIO_BASE_PATH_KETI3", "creative_work")
 
         now = datetime.utcnow()
         ts = int(now.timestamp())

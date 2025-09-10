@@ -99,7 +99,7 @@ const Register: React.FC = () => {
       <Container maxWidth="md">
         <Box textAlign="center" mb={4}>
           <Typography variant="h4" component="h1" className="title-text">
-            互动学习场景下创新能力智能化测评工具 V2.0
+            互动学习场景下创新能力智能化测评工具 V3.0
           </Typography>
         </Box>
         
