@@ -69,7 +69,8 @@ export async function upload (e: { img:File , audio:File}, uploadDir: string, ax
     if (e.audio) form.append('audio', e.audio)
 
     const fileStore = useFileStore()
-    const resp = await uploadToServerWithUid(form, fileStore.uid.value, (ev) => {
+    // Pinia unwraps refs on the store, so fileStore.uid is the number (not a ref)
+    const resp = await uploadToServerWithUid(form, fileStore.uid, (ev) => {
       const p = ev.total ? ev.loaded / ev.total : 0
       // 这里是整体表单的进度，按两段各 49% 比例近似映射
       // 为简单起见，整体进度映射到 authProgress，前端展示即可

@@ -45,6 +45,8 @@ class TwentyFourRecord(Base):
     payload = Column(Text, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
+# 目前没用
+
 class VideoAsset(Base):
     __tablename__ = "video_assets"
 

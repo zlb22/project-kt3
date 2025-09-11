@@ -655,7 +655,13 @@ async def keti3_oss_auth(request: Request, req: OssAuthReq | None = None):
         return error(ERRCODE_COMMON_ERROR, f"MinIO error: {str(e)}")
 
 @app.post("/web/keti3/oss/upload")
-async def keti3_oss_upload(request: Request, img: UploadFile = File(None), audio: UploadFile = File(None)):
+async def keti3_oss_upload(
+    request: Request,
+    img: UploadFile = File(None),
+    audio: UploadFile = File(None),
+    uid: Optional[int] = Form(None),
+    db: Session = Depends(get_db),
+):
     """Proxy upload endpoint to avoid browser-to-MinIO CORS. Accepts multipart form-data with fields 'img' and 'audio'."""
     verify_signature(request)
 
@@ -671,23 +677,51 @@ async def keti3_oss_upload(request: Request, img: UploadFile = File(None), audio
         now = datetime.utcnow()
         ts = int(now.timestamp())
 
-        uid = 0
+        # Resolve uid in a robust way: form field -> header -> token username -> 0
+        resolved_uid = 0
+        # 1) form field uid
+        if uid is not None:
+            try:
+                resolved_uid = int(uid)
+            except Exception:
+                resolved_uid = 0
+        # 2) header X-User-Id
+        if resolved_uid <= 0:
+            try:
+                resolved_uid = int(request.headers.get("X-User-Id", "0"))
+            except Exception:
+                resolved_uid = 0
+        # 3) Authorization token -> username -> students.id
+        if resolved_uid <= 0:
+            try:
+                auth = request.headers.get("Authorization", "")
+                if auth.startswith("Bearer "):
+                    token = auth.split(" ", 1)[1]
+                    payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+                    username = payload.get("sub")
+                    if username:
+                        stu = get_student_by_username(db, username)
+                        if stu:
+                            resolved_uid = int(stu.id)
+            except Exception:
+                resolved_uid = 0
+        # Debug print minimal info
         try:
-            uid = int(request.headers.get("X-User-Id", "0"))
+            print(f"[oss/upload] resolved_uid={resolved_uid}")
         except Exception:
-            uid = 0
+            pass
 
         public_base = f"{MINIO_URL}/{bucket}"
         result: dict[str, str] = {}
 
         if img is not None:
-            img_key = f"{base_path}/{uid}/{ts}/img{uid}{ts}"
+            img_key = f"{base_path}/{resolved_uid}/{ts}/img{resolved_uid}{ts}"
             data = await img.read()
             client.put_object(bucket, img_key, data=io.BytesIO(data), length=len(data), content_type=img.content_type or "image/*")
             result["imgUrl"] = f"{public_base}/{img_key}"
 
         if audio is not None:
-            audio_key = f"{base_path}/{uid}/{ts}/audio{uid}{ts}"
+            audio_key = f"{base_path}/{resolved_uid}/{ts}/audio{resolved_uid}{ts}"
             data = await audio.read()
             client.put_object(bucket, audio_key, data=io.BytesIO(data), length=len(data), content_type=audio.content_type or "audio/*")
             result["audioUrl"] = f"{public_base}/{audio_key}"

@@ -123,8 +123,8 @@ const commit = () => {
 
 // Navigate back to the main frontend dashboard (port 3000)
 const goHome = () => {
-  const host = window.location.hostname
-  const url = `http://${host}:3000/dashboard`
+  const { protocol, hostname } = window.location
+  const url = `${protocol}//${hostname}:3000/dashboard`
   window.location.href = url
 }
 </script>
