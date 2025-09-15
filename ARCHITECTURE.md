@@ -6,6 +6,27 @@
 
 ---
 
+## 10.1 Nginx 拓扑与参考配置
+
+- 采用“单域名 + 多路径（App + /api/）”与“MinIO 独立域名”组合：
+  - App：`https://<APP_DOMAIN>/`（部署 Vite 构建产物）
+  - API：`https://<APP_DOMAIN>/api/` → 反代至 A 机 `:8000`
+  - MinIO：`https://<MINIO_DOMAIN>/` → 反代至 A 机 `:9000`
+- 模板：`deploy/nginx/kt3.conf`（同时包含 80→443 跳转与 ACME 校验路径）
+
+---
+
+## 10.2 直传常见问题排查
+
+- “Client sent an HTTP request to an HTTPS server.”
+  - 现象：MinIO 开启 HTTPS，但 `MINIO_URL` 使用了 `http://`。
+  - 处理：将 `MINIO_URL` 调整为 `https://...` 或确保上游协议一致。
+
+- “SSL: CERTIFICATE_VERIFY_FAILED IP address mismatch”
+  - 现象：`MINIO_URL` 使用 IP + HTTPS，自签证书不包含该 IP 的 SAN。
+  - 开发处理：清空 `MINIO_CA_CERT`，设置 `MINIO_INSECURE_TLS=true`；或改为 HTTP（仅内网）。
+  - 生产处理：使用域名 + 有效证书（经 Nginx 反代），并关闭 `MINIO_INSECURE_TLS`。
+
 ## 1. 总览
 
 - 根目录：`/home/ubuntu/zlb/project-kt3/`
@@ -224,6 +245,24 @@
 
 ---
 
+## 9.1 一键切换环境与构建
+
+- 开发（DEV）：
+  - 切换：`make switch-dev A_LAN_IP=<你的内网IP>`（生成 backend/.env 与前端 .env.development）
+  - 启动：`make dev`（后端:8000/HTTP，CRA:3000，Vite:5173）
+  - 状态/停止：`make dev-status` / `make dev-stop`
+
+- 生产（PROD）：
+  - 切换：`make switch-prod API_DOMAIN=api.<domain> APP_DOMAIN=<domain> KETI3_DOMAIN=<domain> MINIO_DOMAIN=minio.<domain>`
+  - 构建：`make prod-build`（生成 CRA build 与 Vite dist）
+  - Nginx 模板：见 `deploy/nginx/kt3.conf`（单域名多路径 + MinIO 独立域名）
+
+环境变量要点：
+- 开发直传：允许 `MINIO_INSECURE_TLS=true` 以忽略自签/不匹配证书（仅开发）。
+- 上线直传：将 `MINIO_URL` 指向 MinIO 公网域名（经 Nginx 反代的 HTTPS），关闭 `MINIO_INSECURE_TLS`。
+
+---
+
 ## 10. 已知/潜在问题与建议
 
 1) 未定义常量导致 NameError
@@ -254,7 +293,7 @@
 
 6) TLS/证书与安全
 - 位置：`backend/.env` 设置 `MINIO_INSECURE_TLS=true`
-- 建议：生产关闭此项，使用可信 CA 证书（或配置 `MINIO_CA_CERT`）
+ - 建议：生产关闭此项，使用可信 CA 证书（或配置 `MINIO_CA_CERT`）
 
 7) 密码哈希
 - 现状：单次 `SHA256`
