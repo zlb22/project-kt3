@@ -9,6 +9,7 @@ import json
 import os
 from datetime import datetime, timedelta
 import io
+import traceback
 from typing import Optional, List
 import uvicorn
 from dotenv import load_dotenv
@@ -120,6 +121,21 @@ class Save24ptRecordReq(BaseModel):
     uid: int
     payload: Optional[dict | list | str] = None
     payload_str: Optional[str] = None
+
+# Video upload (presign/commit) models
+class VideoPresignReq(BaseModel):
+    video_type: str
+    test_session_id: str
+    bucket: Optional[str] = None
+    content_type: Optional[str] = None
+
+class VideoCommitReq(BaseModel):
+    bucket: str
+    object_name: str
+    test_session_id: str
+    content_type: Optional[str] = None
+    file_size: Optional[int] = None
+    video_type: Optional[str] = None
 
 # Utility functions
 def make_hashed_password(password: str) -> str:
@@ -374,8 +390,16 @@ async def upload_video(
         # 每个 uid 单独文件夹，结构：<camera|screen>/<uid>/<test_session_id>/<filename>
         object_name = f"{folder}/{student.id}/{test_session_id}/{filename}"
 
-        # 读取内容（当前为一次性读取；后续可切换为临时文件/流式上传以降低内存峰值）
-        content = await file.read()
+        # 流式方式：直接使用底层临时文件对象，避免整文件读入内存
+        try:
+            raw = file.file  # SpooledTemporaryFile or file-like
+            raw.seek(0, os.SEEK_END)
+            file_size = raw.tell()
+            raw.seek(0)
+            if file_size <= 0:
+                raise HTTPException(status_code=400, detail="上传文件为空")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"无法读取上传文件: {e}")
 
         # 解析目标 bucket（表单优先，其次环境变量）
         target_bucket = (bucket or MINIO_BUCKET_NAME).strip()
@@ -396,13 +420,13 @@ async def upload_video(
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"检查/创建 bucket 失败: {e}")
 
-        # 上传到 MinIO
+        # 上传到 MinIO（使用文件对象与已知长度，避免高内存占用）
         try:
             client.put_object(
                 target_bucket,
                 object_name,
-                data=io.BytesIO(content),
-                length=len(content),
+                data=raw,
+                length=file_size,
                 content_type=file.content_type,
             )
         except S3Error as e:
@@ -414,7 +438,7 @@ async def upload_video(
             "test_session_id": test_session_id,
             "video_type": folder,
             "filename": filename,
-            "file_size": len(content),
+            "file_size": file_size,
             "upload_time": datetime.now().isoformat(),
             "bucket": target_bucket,
             "object_name": object_name,
@@ -433,7 +457,7 @@ async def upload_video(
             bucket=target_bucket,
             object_name=object_name,
             content_type=file.content_type,
-            file_size=len(content),
+            file_size=file_size,
         )
         db.add(asset)
         db.commit()
@@ -455,7 +479,7 @@ async def upload_video(
             "message": "视频上传成功",
             "video_type": upload_info["video_type"],
             "filename": filename,
-            "file_size": len(content),
+            "file_size": file_size,
             "content_type": file.content_type,
             "bucket": target_bucket,
             "object_name": object_name,
@@ -666,7 +690,7 @@ async def keti3_oss_upload(
     verify_signature(request)
 
     if img is None and audio is None:
-        return error(ERRCODE_PARAM_ERROR, "No files provided. Expect 'img' and/or 'audio' fields.")
+        return error(ERRCODE_INVALID_PARAMS, "No files provided. Expect 'img' and/or 'audio' fields.")
 
     try:
         client = get_minio_client()
@@ -716,14 +740,36 @@ async def keti3_oss_upload(
 
         if img is not None:
             img_key = f"{base_path}/{resolved_uid}/{ts}/img{resolved_uid}{ts}"
-            data = await img.read()
-            client.put_object(bucket, img_key, data=io.BytesIO(data), length=len(data), content_type=img.content_type or "image/*")
+            try:
+                raw = img.file
+                raw.seek(0, os.SEEK_END)
+                img_size = raw.tell()
+                raw.seek(0)
+                if img_size <= 0:
+                    return error(ERRCODE_INVALID_PARAMS, "img is empty")
+                client.put_object(bucket, img_key, data=raw, length=img_size, content_type=img.content_type or "image/*")
+            finally:
+                try:
+                    await img.close()
+                except Exception:
+                    pass
             result["imgUrl"] = f"{public_base}/{img_key}"
 
         if audio is not None:
             audio_key = f"{base_path}/{resolved_uid}/{ts}/audio{resolved_uid}{ts}"
-            data = await audio.read()
-            client.put_object(bucket, audio_key, data=io.BytesIO(data), length=len(data), content_type=audio.content_type or "audio/*")
+            try:
+                raw = audio.file
+                raw.seek(0, os.SEEK_END)
+                audio_size = raw.tell()
+                raw.seek(0)
+                if audio_size <= 0:
+                    return error(ERRCODE_INVALID_PARAMS, "audio is empty")
+                client.put_object(bucket, audio_key, data=raw, length=audio_size, content_type=audio.content_type or "audio/*")
+            finally:
+                try:
+                    await audio.close()
+                except Exception:
+                    pass
             result["audioUrl"] = f"{public_base}/{audio_key}"
 
         return keti3_response(data=result)
@@ -732,6 +778,118 @@ async def keti3_oss_upload(
         print(f"OSS Proxy Upload Error: {e}")
         print(f"Traceback: {traceback.format_exc()}")
         return error(ERRCODE_COMMON_ERROR, f"Upload failed: {str(e)}")
+
+# Presigned video upload (recommended path)
+@app.post("/api/videos/presign")
+async def presign_video_upload(req: VideoPresignReq, current_user: str = Depends(verify_token), db: Session = Depends(get_db)):
+    """Generate a presigned PUT URL for direct video upload to MinIO, and return planned object_name and public_url.
+    Frontend should PUT the file to url, then call /api/videos/commit to register metadata.
+    """
+    try:
+        # Normalize type
+        vt = (req.video_type or "").strip().lower()
+        folder_map = {
+            "camera": "camera",
+            "cam": "camera",
+            "camaer": "camera",
+            "screen": "screen",
+            "scrren": "screen",
+        }
+        folder = folder_map.get(vt)
+        if folder is None:
+            raise HTTPException(status_code=400, detail="video_type 只能是 camera 或 screen")
+
+        # Resolve student uid
+        stu = get_student_by_username(db, current_user)
+        if not stu:
+            raise HTTPException(status_code=404, detail="当前用户未找到")
+
+        # Target bucket
+        target_bucket = (req.bucket or MINIO_BUCKET_NAME).strip()
+        if not target_bucket:
+            raise HTTPException(status_code=400, detail="bucket 不能为空")
+        if "/" in target_bucket or "\\" in target_bucket:
+            raise HTTPException(status_code=400, detail="bucket 名称不合法")
+        if MINIO_ALLOWED_BUCKETS and target_bucket not in MINIO_ALLOWED_BUCKETS:
+            raise HTTPException(status_code=403, detail=f"不允许的 bucket: {target_bucket}")
+
+        # Build object name
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # default content_type
+        ct = (req.content_type or "video/webm").strip()
+        ext = ".webm" if "webm" in ct else ".mp4" if "mp4" in ct else ".webm"
+        filename = f"{current_user}_{req.test_session_id}_{folder}_{timestamp}{ext}"
+        object_name = f"{folder}/{stu.id}/{req.test_session_id}/{filename}"
+
+        client = get_minio_client()
+        ensure_bucket(client, target_bucket)
+        url = presign_put_object(client, target_bucket, object_name, content_type=ct, expires=timedelta(hours=1))
+        public_base = f"{MINIO_URL}/{target_bucket}"
+        return {
+            "bucket": target_bucket,
+            "object_name": object_name,
+            "put_url": url,
+            "public_url": f"{public_base}/{object_name}",
+            "content_type": ct,
+            "uid": stu.id,
+            "username": current_user,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Print detailed traceback to server log for diagnostics
+        print(f"[presign] Error: {e}")
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"presign failed: {e}")
+
+
+@app.post("/api/videos/commit")
+async def commit_video_upload(req: VideoCommitReq, current_user: str = Depends(verify_token), db: Session = Depends(get_db)):
+    """Register an uploaded video object into MySQL video_assets. Frontend should call this after a successful direct upload."""
+    stu = get_student_by_username(db, current_user)
+    if not stu:
+        raise HTTPException(status_code=404, detail="当前用户未找到")
+
+    # derive video_type if not provided
+    vtype = (req.video_type or "").strip().lower()
+    if not vtype:
+        try:
+            vtype = req.object_name.split("/", 1)[0]
+        except Exception:
+            vtype = ""
+    if vtype not in ("camera", "screen"):
+        vtype = "camera"
+
+    content_type = (req.content_type or "video/webm").strip()
+    file_size = int(req.file_size or 0)
+
+    asset = VideoAsset(
+        uid=stu.id,
+        username=current_user,
+        test_session_id=req.test_session_id,
+        video_type=vtype,
+        bucket=req.bucket,
+        object_name=req.object_name,
+        content_type=content_type,
+        file_size=file_size,
+    )
+    db.add(asset)
+    db.commit()
+    db.refresh(asset)
+
+    public_base = f"{MINIO_URL}/{req.bucket}"
+    return {
+        "message": "登记成功",
+        "id": asset.id,
+        "uid": stu.id,
+        "bucket": req.bucket,
+        "object_name": req.object_name,
+        "public_url": f"{public_base}/{req.object_name}",
+        "content_type": content_type,
+        "file_size": file_size,
+        "test_session_id": req.test_session_id,
+        "video_type": vtype,
+    }
 
 @app.options("/web/keti3/log/save")
 async def keti3_log_save_options():

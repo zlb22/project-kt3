@@ -814,57 +814,109 @@ const TwentyFourGame: React.FC<TwentyFourGameProps> = ({ onBack }) => {
       cameraStream: !!cameraStream,
       screenStream: !!screenStream
     });
-    
-    // 详细检查摄像头录制数据
-    if (cameraChunksRef.current.length === 0) {
-      console.warn('⚠️ 摄像头录制数据为空！可能的原因：');
-      console.warn('1. 摄像头权限被拒绝');
-      console.warn('2. 摄像头录制器启动失败');
-      console.warn('3. 录制过程中没有数据收集');
-      console.warn('摄像头流状态:', cameraStream ? '存在' : '不存在');
-      console.warn('摄像头录制器状态:', cameraRecorder?.state || '未创建');
-    } else {
-      console.log('✅ 摄像头录制数据正常，块数:', cameraChunksRef.current.length);
-    }
-    
+
     try {
-      // 上传摄像头录制 - 使用 useRef 中的数据
+      // 封装直传流程：presign -> PUT -> commit；失败则回退到代理上传接口
+      const directUpload = async (blob: Blob, videoType: 'camera' | 'screen') => {
+        const token = localStorage.getItem('token') || '';
+        // 1) presign
+        const presignResp = await fetch('/api/videos/presign', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            video_type: videoType,
+            test_session_id: testSessionId,
+            bucket: UPLOAD_BUCKET,
+            content_type: blob.type || 'video/webm'
+          })
+        });
+        if (!presignResp.ok) throw new Error(`presign failed: ${presignResp.status}`);
+        const presignData = await presignResp.json();
+        const putUrl = presignData.put_url;
+        if (!putUrl) throw new Error('presign missing put_url');
+
+        // 2) PUT to MinIO
+        const putResp = await fetch(putUrl, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': blob.type || 'video/webm'
+          },
+          body: blob
+        });
+        if (!(putResp.status >= 200 && putResp.status < 300)) {
+          throw new Error(`PUT failed: ${putResp.status}`);
+        }
+
+        // 3) commit
+        const commitResp = await fetch('/api/videos/commit', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            bucket: presignData.bucket,
+            object_name: presignData.object_name,
+            test_session_id: testSessionId,
+            content_type: blob.type || presignData.content_type || 'video/webm',
+            file_size: blob.size,
+            video_type: videoType
+          })
+        });
+        if (!commitResp.ok) throw new Error(`commit failed: ${commitResp.status}`);
+        const commitData = await commitResp.json();
+        // 规范返回结构与旧接口保持一致字段
+        return {
+          message: commitData.message || '登记成功',
+          video_type: commitData.video_type || videoType,
+          filename: presignData.object_name.split('/').pop(),
+          file_size: commitData.file_size || blob.size,
+          content_type: commitData.content_type || blob.type || 'video/webm',
+          bucket: commitData.bucket || presignData.bucket,
+          object_name: commitData.object_name || presignData.object_name,
+          file_path: `minio://${commitData.bucket || presignData.bucket}/${commitData.object_name || presignData.object_name}`,
+          test_session_id: testSessionId,
+          upload_time: new Date().toISOString(),
+          uid: commitData.uid,
+          id: commitData.id,
+          public_url: commitData.public_url || presignData.public_url
+        };
+      };
+
+      const proxyUpload = async (blob: Blob, videoType: 'camera' | 'screen') => {
+        const form = new FormData();
+        form.append('file', blob, `${videoType}_${testSessionId}.webm`);
+        form.append('video_type', videoType);
+        form.append('test_session_id', testSessionId);
+        form.append('bucket', UPLOAD_BUCKET);
+        const resp = await fetch('/api/upload/video', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+          body: form
+        });
+        if (!resp.ok) throw new Error(`proxy upload failed: ${resp.status}`);
+        return await resp.json();
+      };
+
+      // 摄像头
       if (cameraChunksRef.current.length > 0) {
         const cameraBlob = new Blob(cameraChunksRef.current, { type: 'video/webm' });
-        const cameraFormData = new FormData();
-        cameraFormData.append('file', cameraBlob, `camera_${testSessionId}.webm`);
-        cameraFormData.append('video_type', 'camera');
-        cameraFormData.append('test_session_id', testSessionId);
-        cameraFormData.append('bucket', UPLOAD_BUCKET);
-        
-        const cameraUpload = fetch('/api/upload/video', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${localStorage.getItem('token')}`
-          },
-          body: cameraFormData
+        const cameraUpload = directUpload(cameraBlob, 'camera').catch((e) => {
+          console.warn('camera direct upload failed, fallback to proxy:', e);
+          return proxyUpload(cameraBlob, 'camera');
         });
-        
         uploadPromises.push(cameraUpload);
       }
-      
-      // 上传屏幕录制 - 使用 useRef 中的数据
+      // 屏幕
       if (screenChunksRef.current.length > 0) {
         const screenBlob = new Blob(screenChunksRef.current, { type: 'video/webm' });
-        const screenFormData = new FormData();
-        screenFormData.append('file', screenBlob, `screen_${testSessionId}.webm`);
-        screenFormData.append('video_type', 'screen');
-        screenFormData.append('test_session_id', testSessionId);
-        screenFormData.append('bucket', UPLOAD_BUCKET);
-        
-        const screenUpload = fetch('/api/upload/video', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${localStorage.getItem('token')}`
-          },
-          body: screenFormData
+        const screenUpload = directUpload(screenBlob, 'screen').catch((e) => {
+          console.warn('screen direct upload failed, fallback to proxy:', e);
+          return proxyUpload(screenBlob, 'screen');
         });
-        
         uploadPromises.push(screenUpload);
       }
       
@@ -877,8 +929,9 @@ const TwentyFourGame: React.FC<TwentyFourGameProps> = ({ onBack }) => {
       const results = await Promise.all(uploadPromises);
       
       // 检查上传结果
+      // 直传模式下，我们已经返回的是 JSON 对象；代理路径下是 Response 需 .json()
       const uploadResults = await Promise.all(
-        results.map(response => response.json())
+        results.map(async (r: any) => (typeof r?.json === 'function' ? r.json() : r))
       );
       
       console.log('视频上传成功:', uploadResults);
