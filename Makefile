@@ -1,16 +1,23 @@
 # Makefile for project-kt3
 # Commands:
-#   Production: start, stop, status (HTTPS frontend + backend)
-#   Development: dev, dev-stop, dev-status (HTTP dev servers)
+#   Development: start, stop, status (HTTPS dev servers)
+#   Production: production-build, production-deploy, production-start, production-stop
+#   Legacy Dev: dev, dev-stop, dev-status (HTTP dev servers)
 #   Deployment: deploy-local, deploy-remote
-#   Build: build
 
-BACKEND_HOST    ?= 172.24.130.213
+# 服务器配置
+DB_SERVER       ?= 172.24.130.213
+WEB_SERVER      ?= 172.24.125.63
+DOMAIN          ?= 172-24-125-63.sslip.io
 REMOTE_USER     ?= ubuntu
-REMOTE_HOST     ?= 172.24.125.63
 SSH_PORT        ?= 22
 
+# 生产环境路径
+PROD_BACKEND_PATH   ?= /opt/project-kt3
+PROD_FRONTEND_PATH  ?= /var/www/project-kt3
+
 .PHONY: start stop status dev dev-stop dev-status build deploy-local deploy-remote
+.PHONY: production-build production-deploy production-start production-stop production-status
 
 # ---------------- Production HTTPS Services ----------------
 
@@ -229,3 +236,151 @@ deploy-remote:
 	@echo "Deploying to remote server..."
 	@chmod +x deploy/scripts/deploy.sh
 	@REMOTE_USER=$(REMOTE_USER) REMOTE_HOST=$(REMOTE_HOST) SSH_PORT=$(SSH_PORT) BACKEND_HOST=$(BACKEND_HOST) ./deploy/scripts/deploy.sh --remote
+
+# ---------------- Production Environment Commands ----------------
+
+production-build:
+	@echo "=== Building for Production Environment ==="
+	@echo "Domain: $(DOMAIN)"
+	@echo "DB Server: $(DB_SERVER)"
+	@echo "Web Server: $(WEB_SERVER)"
+	@chmod +x deploy/build-and-deploy.sh
+	@./deploy/build-and-deploy.sh
+
+production-deploy:
+	@echo "=== Deploying to Production Servers ==="
+	@if [ ! -f deploy/project-kt3-production-*.tar.gz ]; then \
+		echo "No production build found. Running production-build first..."; \
+		$(MAKE) production-build; \
+	fi
+	@latest_build=$$(ls -t deploy/project-kt3-production-*.tar.gz | head -1); \
+	build_name=$$(basename "$$latest_build"); \
+	echo "Using build: $$build_name"; \
+	@if [ "$$(hostname -I | grep -o '172\.24\.130\.213')" ]; then \
+		echo "=== Local deployment on DB Server (172.24.130.213) ==="; \
+		echo "Deploying backend locally..."; \
+		cp "$$latest_build" /tmp/; \
+		cd /tmp && tar -xzf "$$build_name"; \
+		echo "Running backend deployment script..."; \
+		cd /tmp && sudo -S ./build/scripts/deploy-backend.sh < /dev/null; \
+		echo "Uploading to Web Server ($(WEB_SERVER))..."; \
+		scp -P $(SSH_PORT) "$$(pwd)/$$latest_build" $(REMOTE_USER)@$(WEB_SERVER):/tmp/; \
+		echo "Executing deployment on Web Server..."; \
+		ssh -t -p $(SSH_PORT) $(REMOTE_USER)@$(WEB_SERVER) "\
+			cd /tmp && \
+			tar -xzf $$build_name && \
+			sudo ./build/scripts/deploy-web.sh"; \
+	else \
+		echo "=== Remote deployment mode ==="; \
+		echo "Uploading to Web Server ($(WEB_SERVER))..."; \
+		scp -P $(SSH_PORT) "$$latest_build" $(REMOTE_USER)@$(WEB_SERVER):/tmp/; \
+		echo "Uploading to DB Server ($(DB_SERVER))..."; \
+		scp -P $(SSH_PORT) "$$latest_build" $(REMOTE_USER)@$(DB_SERVER):/tmp/; \
+		echo "Executing deployment on Web Server..."; \
+		ssh -p $(SSH_PORT) $(REMOTE_USER)@$(WEB_SERVER) "\
+			cd /tmp && \
+			tar -xzf $$build_name && \
+			sudo ./build/scripts/deploy-web.sh"; \
+		echo "Executing deployment on DB Server..."; \
+		ssh -p $(SSH_PORT) $(REMOTE_USER)@$(DB_SERVER) "\
+			cd /tmp && \
+			tar -xzf $$build_name && \
+			sudo ./build/scripts/deploy-backend.sh"; \
+	fi
+	@echo "=== Production Deployment Complete ==="
+
+production-start:
+	@echo "=== Starting Production Services ==="
+	@if [ "$$(hostname -I | grep -o '172\.24\.130\.213')" ]; then \
+		echo "=== Local mode on DB Server (172.24.130.213) ==="; \
+		echo "Starting backend service locally..."; \
+		sudo systemctl start project-kt3-backend && \
+		sudo systemctl enable project-kt3-backend; \
+		echo "Reloading Nginx on Web Server ($(WEB_SERVER))..."; \
+		ssh -p $(SSH_PORT) $(REMOTE_USER)@$(WEB_SERVER) "\
+			sudo nginx -t && \
+			sudo systemctl reload nginx"; \
+	else \
+		echo "=== Remote mode ==="; \
+		echo "Starting backend service on DB Server ($(DB_SERVER))..."; \
+		ssh -p $(SSH_PORT) $(REMOTE_USER)@$(DB_SERVER) "\
+			sudo systemctl start project-kt3-backend && \
+			sudo systemctl enable project-kt3-backend"; \
+		echo "Reloading Nginx on Web Server ($(WEB_SERVER))..."; \
+		ssh -p $(SSH_PORT) $(REMOTE_USER)@$(WEB_SERVER) "\
+			sudo nginx -t && \
+			sudo systemctl reload nginx"; \
+	fi
+	@echo "=== Production Services Started ==="
+	@echo "Access URL: https://$(DOMAIN)"
+
+production-stop:
+	@echo "=== Stopping Production Services ==="
+	@echo "Stopping backend service on DB Server ($(DB_SERVER))..."
+	@ssh -p $(SSH_PORT) $(REMOTE_USER)@$(DB_SERVER) "\
+		sudo systemctl stop project-kt3-backend" || true
+	@echo "=== Production Services Stopped ==="
+
+production-status:
+	@echo "=== Production Services Status ==="
+	@echo "Backend Service Status ($(DB_SERVER)):"
+	@ssh -p $(SSH_PORT) $(REMOTE_USER)@$(DB_SERVER) "\
+		sudo systemctl status project-kt3-backend --no-pager || true"
+	@echo ""
+	@echo "Nginx Status ($(WEB_SERVER)):"
+	@ssh -p $(SSH_PORT) $(REMOTE_USER)@$(WEB_SERVER) "\
+		sudo systemctl status nginx --no-pager || true"
+	@echo ""
+	@echo "Health Check:"
+	@curl -k -s https://$(DOMAIN)/health || echo "Health check failed"
+
+production-logs:
+	@echo "=== Production Logs ==="
+	@echo "Backend Logs ($(DB_SERVER)):"
+	@ssh -p $(SSH_PORT) $(REMOTE_USER)@$(DB_SERVER) "\
+		sudo journalctl -u project-kt3-backend -n 50 --no-pager"
+	@echo ""
+	@echo "Nginx Access Logs ($(WEB_SERVER)):"
+	@ssh -p $(SSH_PORT) $(REMOTE_USER)@$(WEB_SERVER) "\
+		sudo tail -n 20 /var/log/nginx/project-kt3-access.log || echo 'No access logs found'"
+	@echo ""
+	@echo "Nginx Error Logs ($(WEB_SERVER)):"
+	@ssh -p $(SSH_PORT) $(REMOTE_USER)@$(WEB_SERVER) "\
+		sudo tail -n 20 /var/log/nginx/project-kt3-error.log || echo 'No error logs found'"
+
+production-clean:
+	@echo "=== Cleaning Production Build Files ==="
+	@rm -f deploy/project-kt3-production-*.tar.gz
+	@rm -rf deploy/build
+	@echo "Build files cleaned."
+
+# 生产环境证书管理
+production-ssl-setup:
+	@echo "=== Setting up SSL Certificates ==="
+	@echo "Creating self-signed certificates for $(DOMAIN)..."
+	@ssh -p $(SSH_PORT) $(REMOTE_USER)@$(WEB_SERVER) "\
+		sudo mkdir -p /etc/nginx/ssl && \
+		sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+			-keyout /etc/nginx/ssl/project-kt3.key \
+			-out /etc/nginx/ssl/project-kt3.crt \
+			-subj '/CN=$(DOMAIN)' \
+			-addext 'subjectAltName=DNS:$(DOMAIN)'"
+	@echo "SSL certificates created."
+
+# 生产环境帮助信息
+production-help:
+	@echo "=== Production Environment Commands ==="
+	@echo "make production-build     - Build production packages"
+	@echo "make production-deploy    - Deploy to production servers"
+	@echo "make production-start     - Start production services"
+	@echo "make production-stop      - Stop production services"
+	@echo "make production-status    - Check production status"
+	@echo "make production-logs      - View production logs"
+	@echo "make production-clean     - Clean build files"
+	@echo "make production-ssl-setup - Setup SSL certificates"
+	@echo ""
+	@echo "Environment Variables:"
+	@echo "  DOMAIN=$(DOMAIN)"
+	@echo "  DB_SERVER=$(DB_SERVER)"
+	@echo "  WEB_SERVER=$(WEB_SERVER)"
+	@echo "  REMOTE_USER=$(REMOTE_USER)"
