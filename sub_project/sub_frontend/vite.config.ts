@@ -11,7 +11,8 @@ import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
 
 // https://vitejs.dev/config/
 export default defineConfig({
-  base: process.env.base ? '/creative-solutions' : '/topic-three',
+  // Deployed under Nginx at /topic-three/online-experiment/
+  base: '/topic-three/online-experiment/',
   plugins: [vue(), vueJsx(),
     AutoImport({
       resolvers: [ElementPlusResolver()],

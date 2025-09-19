@@ -27,6 +27,25 @@ const Register: React.FC = () => {
   const { register } = useAuth();
   const navigate = useNavigate();
 
+  const validatePasswordStrength = (password: string) => {
+    if (password.length < 8) {
+      return { isValid: false, message: '密码长度至少8位' };
+    }
+    if (!/[A-Z]/.test(password)) {
+      return { isValid: false, message: '密码必须包含大写字母' };
+    }
+    if (!/[a-z]/.test(password)) {
+      return { isValid: false, message: '密码必须包含小写字母' };
+    }
+    if (!/[0-9]/.test(password)) {
+      return { isValid: false, message: '密码必须包含数字' };
+    }
+    if (!/[!@#$%^&*()_+\-=\[\]{};:'"\\|,.<>\/?~`]/.test(password)) {
+      return { isValid: false, message: '密码必须包含特殊字符（如!@#$%^&*等）' };
+    }
+    return { isValid: true, message: '' };
+  };
+
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({
@@ -48,8 +67,10 @@ const Register: React.FC = () => {
       return;
     }
 
-    if (formData.password.length < 6) {
-      setError('密码长度至少6位');
+    // 强密码验证
+    const passwordValidation = validatePasswordStrength(formData.password);
+    if (!passwordValidation.isValid) {
+      setError(passwordValidation.message);
       setIsLoading(false);
       return;
     }
@@ -186,7 +207,7 @@ const Register: React.FC = () => {
                   onChange={handleChange}
                   className="form-field"
                   required
-                  helperText="密码长度至少6位"
+                  helperText="密码要求：8位以上，包含大小写字母、数字和特殊字符"
                 />
               </Grid>
               

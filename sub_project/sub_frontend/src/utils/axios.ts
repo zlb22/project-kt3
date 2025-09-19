@@ -8,15 +8,25 @@ import { getUrlParam } from '@/utils/url'
 export class Interceptors {
   instance: AxiosInstance
   constructor() {
-    const protocol = window.location.protocol; // 'http:' or 'https:'
-    const host = window.location.hostname;
-    // Backend uses 8000 for HTTP and 8443 for HTTPS
-    const backendPort = protocol === 'https:' ? 8443 : 8000;
+    // Configure API base URL based on environment
+    const baseURL = this.getApiBaseUrl()
     this.instance = axios.create({
-      baseURL: `${protocol}//${host}:${backendPort}`,
+      baseURL,
       timeout: 10000
     })
     this.init()
+  }
+
+  private getApiBaseUrl(): string {
+    const currentOrigin = window.location.origin
+    
+    // Development: sub-frontend runs on 5174, backend on 8443
+    if (currentOrigin.includes(':5174')) {
+      return currentOrigin.replace(':5174', ':8443')
+    }
+    
+    // Production: assume Nginx proxy setup
+    return currentOrigin
   }
 
   init() {

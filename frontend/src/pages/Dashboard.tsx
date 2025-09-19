@@ -54,17 +54,37 @@ const Dashboard: React.FC = () => {
         navigate('/problem-solving');
         break;
       case 'interactive_discussion':
-        // Redirect to backend adapter which upserts student and redirects to sub_project with token
+        // Direct approach: create JWT token and construct URL directly
         try {
-          const protocol = window.location.protocol; // 'http:' or 'https:'
-          const host = window.location.hostname;
-          const backendPort = protocol === 'https:' ? 8443 : 8000;
-          const base = `${protocol}//${host}:${backendPort}`;
-          const username = encodeURIComponent(user?.username || '');
-          const school = encodeURIComponent((user as any)?.school || '');
-          const grade = encodeURIComponent((user as any)?.grade || '');
-          const url = `${base}/web/keti3/entry?username=${username}&school=${school}&grade=${grade}`;
-          window.location.href = url;
+          const token = localStorage.getItem('token');
+          if (!token) {
+            console.error('No authentication token found');
+            navigate('/login');
+            return;
+          }
+
+          // Create a new JWT token for sub-frontend access
+          console.log('Creating sub-frontend access token...');
+          
+          axios.post('/api/auth/create-sub-token', {}, {
+            headers: {
+              'Authorization': `Bearer ${token}`
+            }
+          }).then(response => {
+            const subToken = response.data.token;
+            console.log('Sub-frontend token created');
+            
+            // Construct direct URL to sub-frontend
+            const subFrontendUrl = `https://172.24.130.213:5174/topic-three/online-experiment/?token=${subToken}`;
+            console.log('Redirecting to:', subFrontendUrl);
+            
+            window.location.href = subFrontendUrl;
+          }).catch(error => {
+            console.error('Failed to create sub-frontend token:', error);
+            if (error.response?.status === 401) {
+              navigate('/login');
+            }
+          });
         } catch (e) {
           console.error('Redirect to online experiment failed:', e);
         }
@@ -136,22 +156,6 @@ const Dashboard: React.FC = () => {
                 </Grid>
               ))}
             </Grid>
-
-            <Box textAlign="center" mt={4}>
-              <Button
-                variant="contained"
-                color="secondary"
-                size="large"
-                onClick={() => navigate('/change-password')}
-                sx={{
-                  borderRadius: '69px',
-                  px: 4,
-                  py: 2,
-                }}
-              >
-                修改密码
-              </Button>
-            </Box>
           </Paper>
         </Container>
       </div>

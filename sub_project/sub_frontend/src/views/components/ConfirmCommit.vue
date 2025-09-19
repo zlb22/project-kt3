@@ -23,13 +23,15 @@ const workspaceStore = useWorkspaceStore()
 const fileStore = useFileStore()
 const confirm = () => {
   try {
-    upload({ img: fileStore.imgFile, audio: fileStore.audioFile }, 'test', axios).then(
+    // 改为“文本阐述”：仅上传截图（如有），不再上传音频
+    upload({ img: fileStore.imgFile as any, audio: undefined as any }, 'test', axios).then(
       (res: any) => {
         // const origin=window.location.origin
         saveData({
         uid: fileStore.uid,
         op_type: 'submit',
-        voice_url: res.audioUrl,
+        // 语音改为文本，后端已支持 voice_text 字段
+        voice_text: fileStore.voiceText,
         screenshot_url: res.imgUrl,
         op_time: new Date().toISOString(),
         data_after: operationHistory.operationLog

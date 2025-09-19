@@ -61,6 +61,14 @@ class VideoAsset(Base):
     file_size = Column(BigInteger, nullable=False, default=0)
     upload_time = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
 
+class AuthLock(Base):
+    __tablename__ = "auth_locks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(50), unique=True, index=True, nullable=False)
+    failed_count = Column(Integer, nullable=False, default=0)
+    locked_until = Column(DateTime, nullable=True)
+
 # Create tables
 def create_tables():
     Base.metadata.create_all(bind=engine)

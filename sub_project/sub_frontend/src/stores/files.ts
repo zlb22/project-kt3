@@ -1,4 +1,4 @@
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { getConfig } from '@/api'
 
@@ -6,6 +6,7 @@ import { getConfig } from '@/api'
 export const useFileStore = defineStore('file', () => {
     const audioFile = ref<File | null>(null);
     const imgFile = ref<File | null>(null);
+    const voiceText = ref<string>('');
     const commitStatus = ref(false)
     const uid = ref(0)
     const list = ref({})
@@ -55,6 +56,9 @@ export const useFileStore = defineStore('file', () => {
         console.log(imgFile.value);
 
     }
+    function setVoiceText(text: string) {
+        voiceText.value = text ?? '';
+    }
     function setCommitStatus(status: boolean) {
         commitStatus.value = status;
     }
@@ -67,11 +71,15 @@ export const useFileStore = defineStore('file', () => {
     function setAuthToken(token:string){
         authToken.value = token;
     }
+    watch([voiceText, imgFile, audioFile], () => {
+        commitStatus.value = (voiceText.value?.trim()?.length || 0) > 0 || !!imgFile.value || !!audioFile.value
+    })
     return {
         uid,
         list,
         audioFile,
         imgFile,
+        voiceText,
         commitStatus,
         items,
         confirmCommitStatus,
@@ -80,6 +88,7 @@ export const useFileStore = defineStore('file', () => {
         setUid,
         setAudioFile,
         setImgFile,
+        setVoiceText,
         setCommitStatus,
         changeItemStep,
         setConfirmCommitStatus

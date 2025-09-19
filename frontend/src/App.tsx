@@ -71,11 +71,12 @@ const theme = createTheme({
 });
 
 function App() {
+  const basename = process.env.NODE_ENV === 'production' ? '/topic-three' : '/';
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <AuthProvider>
-        <Router>
+        <Router basename={basename}>
           <div className="App">
             <Routes>
               <Route path="/login" element={<Login />} />

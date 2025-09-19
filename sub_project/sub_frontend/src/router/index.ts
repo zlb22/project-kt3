@@ -6,17 +6,12 @@ const router = createRouter({
   routes: [
     {
       path: '/',
-      name: 'home', 
-      component: HomeView
-    },
-    {
-      path: '/topic-three',
-      name: 'topic-three',
+      name: 'home',
       component: HomeView
     },
     {
       path: '/:pathMatch(.*)*',
-      redirect: '/topic-three'
+      redirect: '/'
     }
   ]
 })

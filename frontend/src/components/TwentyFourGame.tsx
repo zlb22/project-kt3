@@ -35,6 +35,11 @@ import {
   FiberManualRecord,
 } from '@mui/icons-material';
 
+// 本地教学视频资源（已存在于 frontend/resource/ 目录）
+// 如需改为 MinIO/网络地址，替换为对应的 URL 即可
+// 注意：路径相对本文件，CRA 会将其打包处理
+// 使用 public 目录下的资源路径（无需 TS 声明且符合 CRA 约束）
+
 interface Question {
   id: number;
   numbers: number[];
@@ -89,16 +94,25 @@ const TwentyFourGame: React.FC<TwentyFourGameProps> = ({ onBack }) => {
     }
   };
   
-  // 视频相关状态
+  // 视频相关状态（标题可按实际视频内容调整）
   const [videos] = useState<VideoProgress[]>([
-    { videoId: 1, title: '24点游戏基础规则', duration: 120, watchedTime: 0, completed: false },
-    { videoId: 2, title: '基本运算技巧', duration: 150, watchedTime: 0, completed: false },
-    { videoId: 3, title: '高级解题策略', duration: 180, watchedTime: 0, completed: false },
-    { videoId: 4, title: '实战演练示例', duration: 200, watchedTime: 0, completed: false },
+    { videoId: 1, title: '介绍', duration: 0, watchedTime: 0, completed: false },
+    { videoId: 2, title: '测试规则', duration: 0, watchedTime: 0, completed: false },
+    { videoId: 3, title: '游戏规则', duration: 0, watchedTime: 0, completed: false },
+    { videoId: 4, title: '测试示例', duration: 0, watchedTime: 0, completed: false },
   ]);
   const [videoProgress, setVideoProgress] = useState<VideoProgress[]>(videos);
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
   const videoTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const playerRef = useRef<HTMLVideoElement | null>(null);
+
+  // 对应每个索引的视频源
+  const videoSources: Array<string | undefined> = [
+    `${process.env.PUBLIC_URL || ''}/resource/24point_1.mp4`,
+    `${process.env.PUBLIC_URL || ''}/resource/24point_2.mp4`,
+    `${process.env.PUBLIC_URL || ''}/resource/24point_3.mp4`,
+    `${process.env.PUBLIC_URL || ''}/resource/24point_4.mp4`,
+  ];
   
   // 题目相关状态
   const [questions, setQuestions] = useState<Question[]>([]);
@@ -157,25 +171,18 @@ const TwentyFourGame: React.FC<TwentyFourGameProps> = ({ onBack }) => {
   // 视频播放控制
   const handleVideoPlay = () => {
     setIsVideoPlaying(true);
-    videoTimerRef.current = setInterval(() => {
-      setVideoProgress(prev => {
-        const updated = [...prev];
-        const current = updated[currentVideoIndex];
-        if (current && current.watchedTime < current.duration) {
-          current.watchedTime += 1;
-          if (current.watchedTime >= current.duration) {
-            current.completed = true;
-          }
-        }
-        return updated;
-      });
-    }, 1000);
+    // 如果有真实 <video>，由 timeupdate 事件更新进度；不再启用 setInterval 计时
+    if (videoTimerRef.current) {
+      clearInterval(videoTimerRef.current);
+      videoTimerRef.current = null;
+    }
   };
 
   const handleVideoPause = () => {
     setIsVideoPlaying(false);
     if (videoTimerRef.current) {
       clearInterval(videoTimerRef.current);
+      videoTimerRef.current = null;
     }
   };
 
@@ -1119,7 +1126,7 @@ const TwentyFourGame: React.FC<TwentyFourGameProps> = ({ onBack }) => {
   // 渲染视频学习阶段
   if (currentPhase === 'video') {
     const currentVideo = videoProgress[currentVideoIndex];
-    const progress = currentVideo ? (currentVideo.watchedTime / currentVideo.duration) * 100 : 0;
+    const progress = currentVideo && currentVideo.duration > 0 ? (currentVideo.watchedTime / currentVideo.duration) * 100 : 0;
     
     return (
       <div className="page-container">
@@ -1145,6 +1152,15 @@ const TwentyFourGame: React.FC<TwentyFourGameProps> = ({ onBack }) => {
                       StepIconComponent={() => (
                         <VideoLibrary color={index <= currentVideoIndex ? 'primary' : 'disabled'} />
                       )}
+                      sx={{
+                        '& .MuiStepLabel-label': {
+                          fontSize: '0.75rem',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          maxWidth: '80px'
+                        }
+                      }}
                     >
                       {video.title}
                     </StepLabel>
@@ -1160,23 +1176,79 @@ const TwentyFourGame: React.FC<TwentyFourGameProps> = ({ onBack }) => {
                     {currentVideo.title}
                   </Typography>
                   
-                  {/* 模拟视频播放器 */}
-                  <Box 
-                    sx={{ 
-                      width: '100%', 
-                      height: 300, 
-                      backgroundColor: '#000', 
-                      display: 'flex', 
-                      alignItems: 'center', 
-                      justifyContent: 'center',
-                      mb: 2,
-                      borderRadius: 1,
-                    }}
-                  >
-                    <Typography variant="h6" color="white">
-                      {isVideoPlaying ? '视频播放中...' : '点击播放按钮开始学习'}
-                    </Typography>
-                  </Box>
+                  {/* 实际视频播放器（若该索引存在本地资源） */}
+                  {videoSources[currentVideoIndex] ? (
+                    <Box sx={{ width: '100%', mb: 2 }}>
+                      <video
+                        ref={playerRef}
+                        width="100%"
+                        height={500}
+                        controls
+                        src={videoSources[currentVideoIndex]}
+                        onPlay={handleVideoPlay}
+                        onPause={handleVideoPause}
+                        onLoadedMetadata={(e) => {
+                          const el = e.currentTarget;
+                          const d = Math.floor(el.duration || 0);
+                          if (d > 0) {
+                            setVideoProgress(prev => {
+                              const updated = [...prev];
+                              const cur = updated[currentVideoIndex];
+                              if (cur) cur.duration = d;
+                              return updated;
+                            });
+                          }
+                        }}
+                        onTimeUpdate={(e) => {
+                          const el = e.currentTarget;
+                          const t = Math.floor(el.currentTime || 0);
+                          const d = Math.floor(el.duration || 0);
+                          setVideoProgress(prev => {
+                            const updated = [...prev];
+                            const cur = updated[currentVideoIndex];
+                            if (cur) {
+                              cur.duration = d > 0 ? d : cur.duration;
+                              cur.watchedTime = Math.min(cur.duration || t, t);
+                              if (cur.duration && cur.watchedTime >= cur.duration) {
+                                cur.completed = true;
+                              }
+                            }
+                            return updated;
+                          });
+                        }}
+                        onEnded={() => {
+                          setVideoProgress(prev => {
+                            const updated = [...prev];
+                            const cur = updated[currentVideoIndex];
+                            if (cur) {
+                              cur.completed = true;
+                              cur.watchedTime = cur.duration || cur.watchedTime;
+                            }
+                            return updated;
+                          });
+                        }}
+                        style={{ borderRadius: 8, backgroundColor: '#000', objectFit: 'contain' }}
+                      />
+                    </Box>
+                  ) : (
+                    // 无资源时保留占位
+                    <Box 
+                      sx={{ 
+                        width: '100%', 
+                        height: 300, 
+                        backgroundColor: '#000', 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        justifyContent: 'center',
+                        mb: 2,
+                        borderRadius: 1,
+                      }}
+                    >
+                      <Typography variant="h6" color="white">
+                        {isVideoPlaying ? '视频播放中...' : '该条为占位视频，可直接“下一条”'}
+                      </Typography>
+                    </Box>
+                  )}
 
                   <LinearProgress 
                     variant="determinate" 
@@ -1189,13 +1261,6 @@ const TwentyFourGame: React.FC<TwentyFourGameProps> = ({ onBack }) => {
                       {formatTime(currentVideo.watchedTime)} / {formatTime(currentVideo.duration)}
                     </Typography>
                     <Box>
-                      <IconButton 
-                        onClick={isVideoPlaying ? handleVideoPause : handleVideoPlay}
-                        color="primary"
-                        disabled={currentVideo.completed}
-                      >
-                        {isVideoPlaying ? <Pause /> : <PlayArrow />}
-                      </IconButton>
                       <IconButton 
                         onClick={handleNextVideo}
                         color="primary"

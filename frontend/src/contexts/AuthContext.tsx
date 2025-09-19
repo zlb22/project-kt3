@@ -1,5 +1,13 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import axios from 'axios';
+import { encryptPassword, getPublicKey } from '../utils/encryption';
+
+// Configure axios base URL for API requests
+const API_BASE_URL = process.env.NODE_ENV === 'production' 
+  ? window.location.origin 
+  : 'https://172.24.130.213:8443';
+
+axios.defaults.baseURL = API_BASE_URL;
 
 interface User {
   username: string;
@@ -18,13 +26,20 @@ interface RegisterData {
   password: string;
 }
 
+interface CaptchaData {
+  captcha_id: string;
+  image_base64: string;
+  expires_in: number;
+}
+
 interface AuthContextType {
   user: User | null;
   token: string | null;
-  login: (username: string, password: string) => Promise<boolean>;
+  login: (username: string, password: string, captchaId: string, captchaCode: string) => Promise<boolean>;
   register: (userData: RegisterData) => Promise<boolean>;
   logout: () => void;
   changePassword: (oldPassword: string, newPassword: string) => Promise<boolean>;
+  getCaptcha: () => Promise<CaptchaData | null>;
   isLoading: boolean;
 }
 
@@ -76,11 +91,17 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     checkAuth();
   }, [token]);
 
-  const login = async (username: string, password: string): Promise<boolean> => {
+  const login = async (username: string, password: string, captchaId: string, captchaCode: string): Promise<boolean> => {
     try {
+      // Get public key and encrypt password
+      const publicKey = await getPublicKey();
+      const encryptedPassword = await encryptPassword(password, publicKey);
+      
       const response = await axios.post('/api/auth/login', {
         username,
-        password,
+        password: encryptedPassword,
+        captcha_id: captchaId,
+        captcha_code: captchaCode,
       });
 
       const { access_token } = response.data;
@@ -100,6 +121,16 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   };
 
+  const getCaptcha = async (): Promise<CaptchaData | null> => {
+    try {
+      const response = await axios.get('/api/auth/captcha');
+      return response.data;
+    } catch (error) {
+      console.error('Failed to get captcha:', error);
+      return null;
+    }
+  };
+
   const logout = () => {
     localStorage.removeItem('token');
     setToken(null);
@@ -109,7 +140,15 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const register = async (userData: RegisterData): Promise<boolean> => {
     try {
-      const response = await axios.post('/api/auth/register', userData);
+      // Get public key and encrypt password
+      const publicKey = await getPublicKey();
+      const encryptedPassword = await encryptPassword(userData.password, publicKey);
+      const secureUserData = {
+        ...userData,
+        password: encryptedPassword
+      };
+      
+      const response = await axios.post('/api/auth/register', secureUserData);
       console.log('Registration successful:', response.data);
       return true;
     } catch (error) {
@@ -124,9 +163,14 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const changePassword = async (oldPassword: string, newPassword: string): Promise<boolean> => {
     try {
+      // Get public key and encrypt both passwords
+      const publicKey = await getPublicKey();
+      const encryptedOldPassword = await encryptPassword(oldPassword, publicKey);
+      const encryptedNewPassword = await encryptPassword(newPassword, publicKey);
+      
       await axios.post('/api/auth/change-password', {
-        old_password: oldPassword,
-        new_password: newPassword,
+        old_password: encryptedOldPassword,
+        new_password: encryptedNewPassword,
       });
       return true;
     } catch (error) {
@@ -142,6 +186,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     register,
     logout,
     changePassword,
+    getCaptcha,
     isLoading,
   };
 

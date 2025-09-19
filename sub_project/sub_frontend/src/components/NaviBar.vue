@@ -121,11 +121,27 @@ const commit = () => {
   }
 }
 
-// Navigate back to the main frontend dashboard (port 3000)
+// Navigate back to the main frontend dashboard
 const goHome = () => {
-  const { protocol, hostname } = window.location
-  const url = `${protocol}//${hostname}:3000/dashboard`
-  window.location.href = url
+  // Get the configured login URL from environment
+  const loginUrl = import.meta.env.VITE_LOGIN_URL
+  
+  if (loginUrl) {
+    // Use configured URL (should point to main frontend)
+    window.location.href = loginUrl.replace('/login', '/dashboard')
+  } else {
+    // Fallback: try to detect main frontend
+    const currentOrigin = window.location.origin
+    
+    // Development: redirect to main frontend on port 3000
+    if (currentOrigin.includes(':5174')) {
+      const mainFrontendUrl = currentOrigin.replace(':5174', ':3000')
+      window.location.href = `${mainFrontendUrl}/dashboard`
+    } else {
+      // Production: assume Nginx setup
+      window.location.href = `${currentOrigin}/dashboard`
+    }
+  }
 }
 </script>
 <style scoped lang="scss">

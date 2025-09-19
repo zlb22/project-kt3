@@ -1,34 +1,142 @@
+# Import statements first
 from fastapi import FastAPI, HTTPException, Depends, Request, UploadFile, File, Form, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 import jwt
+from jwt import PyJWTError
 import hashlib
-import json
-import os
+import bcrypt
 from datetime import datetime, timedelta
+from typing import Optional
+from cryptography.hazmat.primitives.asymmetric import rsa, padding
+from cryptography.hazmat.primitives import serialization, hashes
+import base64
 import io
+import random
+import secrets
 import traceback
 from typing import Optional, List
 import uvicorn
+import os
 from dotenv import load_dotenv
+import logging
 from urllib.parse import urlparse
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
+import re
+import json
 from minio import Minio
 from minio.error import S3Error
-import io
 from sqlalchemy.orm import Session
-from db_mysql import get_db, Student, OperationLog, TwentyFourRecord, VideoAsset, create_tables
+from db_mysql import get_db, Student, OperationLog, TwentyFourRecord, VideoAsset, AuthLock, create_tables
 from keti3_middleware import verify_signature, keti3_response, error, ERRCODE_COMMON_ERROR, ERRCODE_INVALID_PARAMS
 from keti3_storage import get_minio_client, ensure_bucket, presign_put_object
 
 # Load environment variables
 load_dotenv()
 
+# Configuration constants
+CAPTCHA_EXPIRE_SECONDS = int(os.getenv("CAPTCHA_EXPIRE_SECONDS", "120"))
+LOCK_THRESHOLD = int(os.getenv("AUTH_LOCK_THRESHOLD", "5"))
+LOCK_DURATION_MINUTES = int(os.getenv("AUTH_LOCK_DURATION_MINUTES", "15"))
+
+# In-memory captcha store: id -> { code, expires }
+_captcha_store: dict[str, dict] = {}
+
+def _captcha_prune_now():
+    now = datetime.utcnow().timestamp()
+    expired = [k for k, v in _captcha_store.items() if v.get("expires_ts", 0) <= now]
+    for k in expired:
+        try:
+            del _captcha_store[k]
+        except Exception:
+            pass
+
+def _gen_captcha_text(length: int = 5) -> str:
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    return ''.join(secrets.choice(alphabet) for _ in range(length))
+
+def _render_captcha_image(text: str, width: int = 140, height: int = 50) -> bytes:
+    img = Image.new('RGB', (width, height), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    # Try to load a common font; fallback to default
+    try:
+        font = ImageFont.truetype("DejaVuSans-Bold.ttf", 28)
+    except Exception:
+        font = ImageFont.load_default()
+    # Add noise lines
+    for _ in range(8):
+        x1, y1 = random.randint(0, width), random.randint(0, height)
+        x2, y2 = random.randint(0, width), random.randint(0, height)
+        draw.line(((x1, y1), (x2, y2)), fill=(random.randint(150,200), random.randint(150,200), random.randint(150,200)), width=1)
+    # Draw text with slight jitter per char
+    x = 10
+    for ch in text:
+        y = random.randint(5, 15)
+        draw.text((x, y), ch, fill=(random.randint(0,80), random.randint(0,80), random.randint(0,80)), font=font)
+        x += 24
+    # Light blur
+    try:
+        img = img.filter(ImageFilter.SMOOTH)
+    except Exception:
+        pass
+    buf = io.BytesIO()
+    img.save(buf, format='PNG')
+    return buf.getvalue()
+
+def _validate_password_strength(password: str) -> tuple[bool, str]:
+    """Validate password meets security requirements: 8+ chars, uppercase, lowercase, numbers, special chars"""
+    if len(password) < 8:
+        return False, "密码长度至少8位"
+    
+    if not re.search(r'[A-Z]', password):
+        return False, "密码必须包含大写字母"
+    
+    if not re.search(r'[a-z]', password):
+        return False, "密码必须包含小写字母"
+    
+    if not re.search(r'[0-9]', password):
+        return False, "密码必须包含数字"
+    
+    if not re.search(r'[!@#$%^&*()_+\-=\[\]{};:\'"\\|,.<>\/?~`]', password):
+        return False, "密码必须包含特殊字符（如!@#$%^&*等）"
+    
+    return True, ""
+
+def _validate_and_consume_captcha(captcha_id: str, captcha_code: str) -> bool:
+    _captcha_prune_now()
+    if not captcha_id or not captcha_code:
+        return False
+    rec = _captcha_store.get(captcha_id)
+    if not rec:
+        return False
+    # One-time use
+    try:
+        del _captcha_store[captcha_id]
+    except Exception:
+        pass
+    if rec.get("expires_ts", 0) < datetime.utcnow().timestamp():
+        return False
+    return str(captcha_code).strip().lower() == rec.get("code", "")
+
 # JWT Configuration
-SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
-ALGORITHM = os.getenv("ALGORITHM", "HS256")
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
+SECRET_KEY = "your-secret-key-here"  # Change this in production
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
+# Generate RSA key pair for password encryption
+private_key = rsa.generate_private_key(
+    public_exponent=65537,
+    key_size=2048,
+)
+public_key = private_key.public_key()
+
+# Serialize public key for transmission
+public_key_pem = public_key.public_bytes(
+    encoding=serialization.Encoding.PEM,
+    format=serialization.PublicFormat.SubjectPublicKeyInfo
+).decode('utf-8')
 
 # MongoDB Configuration (legacy; not used for /api/auth/* anymore)
 MONGODB_URL = os.getenv("MONGODB_URL", "mongodb://localhost:27017")
@@ -44,27 +152,81 @@ MINIO_BUCKET_KETI3 = os.getenv("MINIO_BUCKET_KETI3", os.getenv("MINIO_BUCKET", "
 # 可选：限制允许的 bucket，逗号分隔；为空则不限制
 MINIO_ALLOWED_BUCKETS = [b.strip() for b in os.getenv("MINIO_ALLOWED_BUCKETS", "").split(",") if b.strip()]
 
+# Optional: enable append-only JSON logging for uploads (for debugging/audit). Default: disabled
+UPLOADS_JSON_LOG_ENABLED = os.getenv("UPLOADS_JSON_LOG_ENABLED", "false").lower() in ("1", "true", "yes")
+
 app = FastAPI(title="Educational Assessment API", version="2.0")
 security = HTTPBearer()
+
+# Logger for auth debugging
+logger = logging.getLogger("auth")
+logger.setLevel(logging.INFO)
 
 # Initialize MySQL tables
 create_tables()
 
 # Removed legacy MongoDB client and collections; switched to MySQL-only metadata storage
 
+cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",")
+
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173").split(","),
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# Add security headers middleware
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    # Force HTTPS and prevent downgrade attacks
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    # Prevent clickjacking
+    response.headers["X-Frame-Options"] = "DENY"
+    # Prevent MIME type sniffing
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    # XSS protection
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    return response
+
+# HTTP to HTTPS redirect middleware
+@app.middleware("http")
+async def force_https(request: Request, call_next):
+    if request.headers.get("x-forwarded-proto") == "http":
+        url = str(request.url).replace("http://", "https://", 1)
+        return RedirectResponse(url=url, status_code=301)
+    return await call_next(request)
+
+@app.get("/api/auth/captcha")
+async def get_captcha():
+    """Generate a new CAPTCHA and return { captcha_id, image_base64 }"""
+    _captcha_prune_now()
+    text = _gen_captcha_text()
+    cid = secrets.token_urlsafe(16)
+    img_bytes = _render_captcha_image(text)
+    b64 = base64.b64encode(img_bytes).decode('ascii')
+    _captcha_store[cid] = {
+        "code": text.lower(),
+        "expires_ts": (datetime.utcnow().timestamp() + CAPTCHA_EXPIRE_SECONDS),
+    }
+    return {"captcha_id": cid, "image_base64": f"data:image/png;base64,{b64}", "expires_in": CAPTCHA_EXPIRE_SECONDS}
+
+@app.get("/api/auth/public-key")
+async def get_public_key():
+    """Get RSA public key for password encryption"""
+    return {"public_key": public_key_pem}
+
+# Pydantic models
+
 # Pydantic models
 class UserLogin(BaseModel):
     username: str
     password: str
+    captcha_id: str
+    captcha_code: str
 
 class UserCreate(BaseModel):
     username: str
@@ -113,6 +275,7 @@ class Keti3LogSaveReq(BaseModel):
     uid: int
     op_type: Optional[str] = None
     voice_url: Optional[str] = None
+    voice_text: Optional[str] = None
     screenshot_url: Optional[str] = None
     op_time: Optional[str] = None
     data_after: Optional[dict | list | str] = None
@@ -139,7 +302,10 @@ class VideoCommitReq(BaseModel):
 
 # Utility functions
 def make_hashed_password(password: str) -> str:
-    return hashlib.sha256(str.encode(password)).hexdigest()
+    """Hash password using bcrypt with salt"""
+    salt = bcrypt.gensalt()
+    hashed = bcrypt.hashpw(password.encode('utf-8'), salt)
+    return hashed.decode('utf-8')
 
 # MySQL user operations (replace legacy Mongo for /api/auth/*)
 def get_student_by_username(db: Session, username: str) -> Student | None:
@@ -173,8 +339,59 @@ def update_student_password_mysql(db: Session, username: str, new_password_hash:
 
 # Removed legacy MongoDB password update helper
 
-def check_password(password: str, hashed_password: str) -> bool:
-    return make_hashed_password(password) == hashed_password
+def decrypt_password(encrypted_password: str) -> str:
+    """
+    Decrypt RSA encrypted password from frontend
+    """
+    try:
+        # Decode base64 encrypted password
+        encrypted_bytes = base64.b64decode(encrypted_password)
+        
+        # Decrypt using private key
+        decrypted_bytes = private_key.decrypt(
+            encrypted_bytes,
+            padding.OAEP(
+                mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                algorithm=hashes.SHA256(),
+                label=None
+            )
+        )
+        
+        return decrypted_bytes.decode('utf-8')
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="Password decryption failed")
+
+def check_password(encrypted_password: str, stored_password_hash: str) -> bool:
+    """
+    Verify encrypted password against stored hash
+    Frontend sends RSA encrypted password, backend decrypts and compares
+    """
+    try:
+        # Decrypt password first
+        password_from_frontend = decrypt_password(encrypted_password)
+        try:
+            logger.info("auth.check_password: decrypted password length=%d, stored_prefix=%s", len(password_from_frontend), stored_password_hash[:4])
+        except Exception:
+            pass
+        
+        # If stored hash is bcrypt format ($2a$, $2b$, $2y$)
+        if stored_password_hash.startswith(('$2a$', '$2b$', '$2y$')):
+            # 1) Try bcrypt against plaintext password (current correct behavior)
+            if bcrypt.checkpw(password_from_frontend.encode('utf-8'), stored_password_hash.encode('utf-8')):
+                logger.info("auth.check_password: bcrypt verification success (plaintext)")
+                return True
+            # 2) Backward compatibility: some historical accounts may have stored bcrypt(hash_sha256(password))
+            legacy_sha = hashlib.sha256(password_from_frontend.encode('utf-8')).hexdigest()
+            ok = bcrypt.checkpw(legacy_sha.encode('utf-8'), stored_password_hash.encode('utf-8'))
+            logger.info("auth.check_password: bcrypt(sha256) fallback result=%s", ok)
+            return ok
+        else:
+            # Legacy SHA256 hash
+            ok = hashlib.sha256(str.encode(password_from_frontend)).hexdigest() == stored_password_hash
+            logger.info("auth.check_password: legacy sha256 compare result=%s", ok)
+            return ok
+    except Exception:
+        return False
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
@@ -207,43 +424,106 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
 # Adapter entry: upsert student and redirect to sub_project with JWT token
 KETI3_FRONTEND_URL = os.getenv("KETI3_FRONTEND_URL", "https://localhost:5173/topic-three")
 
+def get_keti3_frontend_url(request: Request) -> str:
+    """
+    Auto-detect frontend URL based on environment and request
+    """
+    # Check if we have explicit config
+    if KETI3_FRONTEND_URL and not KETI3_FRONTEND_URL.startswith("auto://"):
+        return KETI3_FRONTEND_URL
+    
+    # Auto-detect based on request origin
+    origin = request.headers.get("origin") or f"{request.url.scheme}://{request.url.hostname}"
+    if request.url.port and request.url.port not in [80, 443]:
+        origin = f"{origin}:{request.url.port}"
+    
+    # Development: use sub-frontend dev server
+    if "localhost" in origin or "127.0.0.1" in origin or ":3000" in origin:
+        return f"{request.url.scheme}://{request.url.hostname}:5174/topic-three/online-experiment"
+    
+    # Production: assume Nginx proxy at /topic-three/online-experiment
+    return f"{origin}/topic-three/online-experiment"
+
 @app.get("/web/keti3/entry")
-async def keti3_entry(username: str, school: str = "", grade: str = "", db: Session = Depends(get_db)):
-    """Upsert student into MySQL and redirect to sub_project page with JWT token in query."""
-    # Upsert student by username
-    student = db.query(Student).filter(Student.username == username).first()
+async def keti3_entry(request: Request, current_user: str = Depends(verify_token), db: Session = Depends(get_db)):
+    """
+    Secure entry point - requires authentication, no URL parameters
+    Redirects to sub_project with JWT token
+    """
+    # Get user info from token (already authenticated)
+    student = db.query(Student).filter(Student.username == current_user).first()
     if not student:
-        student = Student(username=username, school=school or "", grade=grade or "")
-        db.add(student)
-        db.commit()
-        db.refresh(student)
-    else:
-        # Optionally update school/grade if provided
-        updated = False
-        if school and student.school != school:
-            student.school = school
-            updated = True
-        if grade and student.grade != grade:
-            student.grade = grade
-            updated = True
-        if updated:
-            db.commit()
+        raise HTTPException(status_code=404, detail="User not found")
 
-    # Issue JWT using existing helper
+    # Issue JWT for sub-frontend
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    token = create_access_token(data={"sub": username}, expires_delta=access_token_expires)
+    token = create_access_token(data={"sub": current_user}, expires_delta=access_token_expires)
 
-    # Redirect to sub_project (token in query)
-    redirect_url = f"{KETI3_FRONTEND_URL}?token={token}"
+    # Auto-detect frontend URL
+    frontend_url = get_keti3_frontend_url(request)
+    redirect_url = f"{frontend_url}?token={token}"
+    
     return RedirectResponse(url=redirect_url, status_code=302)
+
+@app.post("/api/auth/create-sub-token")
+async def create_sub_token(current_user: str = Depends(verify_token), db: Session = Depends(get_db)):
+    """
+    Create a JWT token for sub-frontend access
+    """
+    # Verify user exists
+    student = db.query(Student).filter(Student.username == current_user).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Issue JWT for sub-frontend
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    token = create_access_token(data={"sub": current_user}, expires_delta=access_token_expires)
+    
+    return {"token": token}
 
 # Authentication endpoints
 @app.post("/api/auth/login", response_model=Token)
 async def login(user_data: UserLogin, db: Session = Depends(get_db)):
-    """Login via MySQL students table"""
+    """Login via MySQL students table with CAPTCHA and lockout"""
+    # 1) Lockout check
+    lock = db.query(AuthLock).filter(AuthLock.username == user_data.username).first()
+    now_dt = datetime.utcnow()
+    if lock and lock.locked_until and lock.locked_until > now_dt:
+        remaining = int((lock.locked_until - now_dt).total_seconds() // 60) + 1
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=f"账号已锁定，请稍后再试（约{remaining}分钟）")
+
+    # 2) CAPTCHA validation
+    if not _validate_and_consume_captcha(user_data.captcha_id, user_data.captcha_code):
+        # Count as a failure
+        if not lock:
+            lock = AuthLock(username=user_data.username, failed_count=1, locked_until=None)
+            db.add(lock)
+        else:
+            lock.failed_count = (lock.failed_count or 0) + 1
+        if lock.failed_count >= LOCK_THRESHOLD:
+            lock.locked_until = now_dt + timedelta(minutes=LOCK_DURATION_MINUTES)
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="验证码错误或过期")
+
+    # 3) Password validation
     stu = get_student_by_username(db, user_data.username)
     if not stu or not stu.password or not check_password(user_data.password, stu.password):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password")
+        if not lock:
+            lock = AuthLock(username=user_data.username, failed_count=1, locked_until=None)
+            db.add(lock)
+        else:
+            lock.failed_count = (lock.failed_count or 0) + 1
+        if lock.failed_count >= LOCK_THRESHOLD:
+            lock.locked_until = now_dt + timedelta(minutes=LOCK_DURATION_MINUTES)
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户名或密码错误")
+
+    # 4) Success -> reset lock
+    if lock:
+        lock.failed_count = 0
+        lock.locked_until = None
+        db.commit()
+
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(data={"sub": user_data.username}, expires_delta=access_token_expires)
     return {"access_token": access_token, "token_type": "bearer"}
@@ -264,14 +544,22 @@ async def register_user(user_data: UserRegister, db: Session = Depends(get_db)):
             detail="密码不能为空"
         )
     
-    if len(user_data.password) < 6:
+    # 解密密码后进行强密码验证
+    try:
+        plain_password = decrypt_password(user_data.password)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="密码解密失败")
+    is_valid, error_msg = _validate_password_strength(plain_password)
+    if not is_valid:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="密码长度至少6位"
+            detail=error_msg
         )
     
-    # 哈希密码
-    hashed_password = make_hashed_password(user_data.password)
+    # 哈希密码（明文）
+    hashed_password = make_hashed_password(plain_password)
     # 创建用户（MySQL）
     user_id = create_student_mysql(
         db,
@@ -463,17 +751,22 @@ async def upload_video(
         db.commit()
         db.refresh(asset)
 
-        # 保存上传记录到JSON文件
-        uploads_log_file = os.path.join(UPLOAD_DIR, "uploads_log.json")
-        uploads_log = []
-        if os.path.exists(uploads_log_file):
-            with open(uploads_log_file, 'r', encoding='utf-8') as f:
-                uploads_log = json.load(f)
+        # 可选：保存上传记录到 JSON 文件（仅用于调试/审计）
+        if UPLOADS_JSON_LOG_ENABLED:
+            uploads_log_file = os.path.join(UPLOAD_DIR, "uploads_log.json")
+            uploads_log = []
+            if os.path.exists(uploads_log_file):
+                try:
+                    with open(uploads_log_file, 'r', encoding='utf-8') as f:
+                        uploads_log = json.load(f)
+                except Exception:
+                    # 如果旧日志损坏，则从空开始
+                    uploads_log = []
 
-        uploads_log.append(upload_info)
+            uploads_log.append(upload_info)
 
-        with open(uploads_log_file, 'w', encoding='utf-8') as f:
-            json.dump(uploads_log, f, ensure_ascii=False, indent=2)
+            with open(uploads_log_file, 'w', encoding='utf-8') as f:
+                json.dump(uploads_log, f, ensure_ascii=False, indent=2)
 
         return {
             "message": "视频上传成功",
@@ -779,6 +1072,11 @@ async def keti3_oss_upload(
         print(f"Traceback: {traceback.format_exc()}")
         return error(ERRCODE_COMMON_ERROR, f"Upload failed: {str(e)}")
 
+@app.options("/web/keti3/oss/upload")
+async def keti3_oss_upload_options():
+    """Handle OPTIONS for oss upload"""
+    return {}
+
 # Presigned video upload (recommended path)
 @app.post("/api/videos/presign")
 async def presign_video_upload(req: VideoPresignReq, current_user: str = Depends(verify_token), db: Session = Depends(get_db)):
@@ -902,6 +1200,7 @@ async def keti3_log_save(request: Request, req: Keti3LogSaveReq, db: Session = D
     try:
         details_obj = {
             "voice_url": req.voice_url,
+            "voice_text": req.voice_text,
             "screenshot_url": req.screenshot_url,
             "op_time": req.op_time,
             "data_after": req.data_after,

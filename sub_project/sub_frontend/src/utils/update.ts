@@ -106,7 +106,7 @@ export async function upload (e: { img:File , audio:File}, uploadDir: string, ax
     let progressed = 0
     const mapProgress = (delta:number) => {
       progressed = Math.min(1, progressed + delta)
-      config.authProgress = Math.min(98, Math.floor(progressed * 98))
+      config.authProgress = Math.min(100, Math.floor(progressed * 100))
     }
 
     const imgUrl = await doPut(imgItem, e.img, (p) => mapProgress((p - 0) * 0.5))
@@ -126,7 +126,7 @@ export async function upload (e: { img:File , audio:File}, uploadDir: string, ax
       const fileStore = useFileStore()
       const resp = await uploadToServerWithUid(form, fileStore.uid, (ev) => {
         const p = ev.total ? ev.loaded / ev.total : 0
-        config.authProgress = Math.min(98, Math.floor(p * 98))
+        config.authProgress = Math.min(100, Math.floor(p * 100))
       })
       const body = resp.data as any
       const ok = resp.status === 200 && (typeof body?.errcode !== 'undefined' ? body.errcode === 0 : body?.code === 0)
