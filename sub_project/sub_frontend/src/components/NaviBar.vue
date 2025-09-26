@@ -123,23 +123,20 @@ const commit = () => {
 
 // Navigate back to the main frontend dashboard
 const goHome = () => {
-  // Get the configured login URL from environment
-  const loginUrl = import.meta.env.VITE_LOGIN_URL
+  // Get the configured dashboard URL from environment
+  const dashboardUrl = import.meta.env.VITE_DASHBOARD_URL
   
-  if (loginUrl) {
-    // Use configured URL (should point to main frontend)
-    window.location.href = loginUrl.replace('/login', '/dashboard')
+  if (dashboardUrl) {
+    // Use configured dashboard URL (should point to Nginx proxy)
+    window.location.href = dashboardUrl
   } else {
-    // Fallback: try to detect main frontend
-    const currentOrigin = window.location.origin
-    
-    // Development: redirect to main frontend on port 3000
-    if (currentOrigin.includes(':5174')) {
-      const mainFrontendUrl = currentOrigin.replace(':5174', ':3000')
-      window.location.href = `${mainFrontendUrl}/dashboard`
+    // Fallback: try to use login URL and replace with dashboard
+    const loginUrl = import.meta.env.VITE_LOGIN_URL
+    if (loginUrl) {
+      window.location.href = loginUrl.replace('/login', '/dashboard')
     } else {
-      // Production: assume Nginx setup
-      window.location.href = `${currentOrigin}/dashboard`
+      // Last fallback: assume current origin with dashboard path
+      window.location.href = `${window.location.origin}/dashboard`
     }
   }
 }

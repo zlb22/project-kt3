@@ -38,7 +38,6 @@ interface AuthContextType {
   login: (username: string, password: string, captchaId: string, captchaCode: string) => Promise<boolean>;
   register: (userData: RegisterData) => Promise<boolean>;
   logout: () => void;
-  changePassword: (oldPassword: string, newPassword: string) => Promise<boolean>;
   getCaptcha: () => Promise<CaptchaData | null>;
   isLoading: boolean;
 }
@@ -149,8 +148,10 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       };
       
       const response = await axios.post('/api/auth/register', secureUserData);
-      console.log('Registration successful:', response.data);
-      return true;
+      console.log('Registration response:', response.data);
+      
+      // 检查后端返回的success字段
+      return response.data.success === true;
     } catch (error) {
       console.error('Registration failed:', error);
       if (axios.isAxiosError(error)) {
@@ -161,23 +162,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   };
 
-  const changePassword = async (oldPassword: string, newPassword: string): Promise<boolean> => {
-    try {
-      // Get public key and encrypt both passwords
-      const publicKey = await getPublicKey();
-      const encryptedOldPassword = await encryptPassword(oldPassword, publicKey);
-      const encryptedNewPassword = await encryptPassword(newPassword, publicKey);
-      
-      await axios.post('/api/auth/change-password', {
-        old_password: encryptedOldPassword,
-        new_password: encryptedNewPassword,
-      });
-      return true;
-    } catch (error) {
-      console.error('Password change failed:', error);
-      return false;
-    }
-  };
+
 
   const value: AuthContextType = {
     user,
@@ -185,7 +170,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     login,
     register,
     logout,
-    changePassword,
     getCaptcha,
     isLoading,
   };

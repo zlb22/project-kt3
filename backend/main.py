@@ -529,56 +529,13 @@ async def login(user_data: UserLogin, db: Session = Depends(get_db)):
     return {"access_token": access_token, "token_type": "bearer"}
 
 @app.post("/api/auth/register")
-async def register_user(user_data: UserRegister, db: Session = Depends(get_db)):
+async def register_user(user_data: UserRegister, request: Request, db: Session = Depends(get_db)):
     """用户注册"""
-    # 验证输入数据
-    if not user_data.username.strip():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="用户名不能为空"
-        )
     
-    if not user_data.password.strip():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="密码不能为空"
-        )
-    
-    # 解密密码后进行强密码验证
-    try:
-        plain_password = decrypt_password(user_data.password)
-    except HTTPException:
-        raise
-    except Exception:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="密码解密失败")
-    is_valid, error_msg = _validate_password_strength(plain_password)
-    if not is_valid:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=error_msg
-        )
-    
-    # 哈希密码（明文）
-    hashed_password = make_hashed_password(plain_password)
-    # 创建用户（MySQL）
-    user_id = create_student_mysql(
-        db,
-        username=user_data.username,
-        school=user_data.school,
-        student_id=user_data.student_id,
-        grade=user_data.grade,
-        password_hash=hashed_password,
-    )
-    if user_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="用户名已存在"
-        )
-    
+    # 直接返回注册失败，不进行任何实际操作
     return {
-        "message": "用户注册成功",
-        "user_id": str(user_id),
-        "username": user_data.username
+        "success": False,
+        "message": "注册失败"
     }
 
 @app.get("/api/auth/me", response_model=User)

@@ -190,15 +190,55 @@ const Login: React.FC = () => {
             </Button>
           </form>
           
-          <Box textAlign="center" mt={2}>
-            <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 2 }}>
-              <Link to="/change-password" style={{ textDecoration: 'none' }}>
-                <Button variant="text" color="primary">
-                  修改密码
-                </Button>
-              </Link>
+          {/* 分隔线和注册区域 */}
+          <Box sx={{ mt: 3, mb: 2, width: '100%' }}>
+            <Box sx={{ 
+              display: 'flex', 
+              alignItems: 'center', 
+              mb: 2,
+              '&::before, &::after': {
+                content: '""',
+                flex: 1,
+                height: '1px',
+                backgroundColor: '#e0e0e0'
+              },
+              '&::before': {
+                marginRight: '16px'
+              },
+              '&::after': {
+                marginLeft: '16px'
+              }
+            }}>
+              <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.875rem' }}>
+                还没有账号？
+              </Typography>
+            </Box>
+            
+            <Box textAlign="center">
               <Link to="/register" style={{ textDecoration: 'none' }}>
-                <Button variant="text" color="primary">
+                <Button 
+                  variant="outlined" 
+                  color="primary"
+                  fullWidth
+                  sx={{
+                    borderRadius: '8px',
+                    padding: '12px 24px',
+                    fontSize: '1rem',
+                    fontWeight: 500,
+                    textTransform: 'none',
+                    border: '2px solid',
+                    borderColor: 'primary.main',
+                    backgroundColor: 'transparent',
+                    color: 'primary.main',
+                    '&:hover': {
+                      backgroundColor: 'primary.main',
+                      color: 'white',
+                      transform: 'translateY(-1px)',
+                      boxShadow: '0 4px 8px rgba(25, 118, 210, 0.3)'
+                    },
+                    transition: 'all 0.3s ease'
+                  }}
+                >
                   立即注册
                 </Button>
               </Link>

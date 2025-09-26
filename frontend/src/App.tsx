@@ -12,7 +12,6 @@ import InteractiveDiscussion from './pages/InteractiveDiscussion';
 import AutTest from './pages/AutTest';
 import EmotionTest from './pages/EmotionTest';
 import OnlineClass from './pages/OnlineClass';
-import ChangePassword from './pages/ChangePassword';
 import './App.css';
 
 const theme = createTheme({
@@ -71,7 +70,7 @@ const theme = createTheme({
 });
 
 function App() {
-  const basename = process.env.NODE_ENV === 'production' ? '/topic-three' : '/';
+  const basename = '/';
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
@@ -81,7 +80,6 @@ function App() {
             <Routes>
               <Route path="/login" element={<Login />} />
               <Route path="/register" element={<Register />} />
-              <Route path="/change-password" element={<ChangePassword />} />
               <Route
                 path="/dashboard"
                 element={

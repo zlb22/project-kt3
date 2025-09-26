@@ -8,7 +8,7 @@
 # 服务器配置
 DB_SERVER       ?= 172.24.130.213
 WEB_SERVER      ?= 172.24.125.63
-DOMAIN          ?= 172-24-125-63.sslip.io
+DOMAIN          ?= kt3.bnu.edu.cn
 REMOTE_USER     ?= ubuntu
 SSH_PORT        ?= 22
 
@@ -36,8 +36,8 @@ start:
 	    > server-https.log 2>&1 & echo $$! > uvicorn-https.pid
 	@echo "[frontend] Starting React HTTPS dev server (https://0.0.0.0:3000)..."
 	@HOST=0.0.0.0 npm --prefix frontend run start-https > frontend/dev.log 2>&1 & echo $$! > frontend/dev.pid
-	@echo "[sub-frontend] Starting Vue dev server (https://0.0.0.0:5174)..."
-	@cd sub_project/sub_frontend && npm run dev -- --host 0.0.0.0 --port 5174 \
+	@echo "[sub-frontend] Starting Vue dev server with production URLs (https://0.0.0.0:5174)..."
+	@cd sub_project/sub_frontend && npm run dev -- --host 0.0.0.0 --port 5174 --mode prod \
 	    > dev-https.log 2>&1 & echo $$! > dev-https.pid
 	@echo "HTTPS services started:"
 	@echo "  Backend:      https://localhost:8443"

@@ -74,8 +74,9 @@ const Dashboard: React.FC = () => {
             const subToken = response.data.token;
             console.log('Sub-frontend token created');
             
-            // Construct direct URL to sub-frontend
-            const subFrontendUrl = `https://172.24.130.213:5174/topic-three/online-experiment/?token=${subToken}`;
+            // Construct URL to sub-frontend through nginx proxy
+            const currentOrigin = window.location.origin; // This will be the current domain
+            const subFrontendUrl = `${currentOrigin}/topic-three/online-experiment/?token=${subToken}`;
             console.log('Redirecting to:', subFrontendUrl);
             
             window.location.href = subFrontendUrl;
