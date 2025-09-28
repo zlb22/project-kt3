@@ -167,7 +167,7 @@ create_tables()
 
 # Removed legacy MongoDB client and collections; switched to MySQL-only metadata storage
 
-cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",")
+cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173,https://kt3.bnu.edu.cn").split(",")
 
 # CORS middleware
 app.add_middleware(
@@ -193,13 +193,21 @@ async def add_security_headers(request: Request, call_next):
     return response
 
 # HTTP to HTTPS redirect middleware
-@app.middleware("http")
-async def force_https(request: Request, call_next):
-    if request.headers.get("x-forwarded-proto") == "http":
-        url = str(request.url).replace("http://", "https://", 1)
-        return RedirectResponse(url=url, status_code=301)
-    return await call_next(request)
+# @app.middleware("http")
+# async def force_https(request: Request, call_next):
+#     # 强制跳转到 https
+#     if request.headers.get("x-forwarded-proto") == "http":
+#         url = request.url.replace(scheme="httpshttps")
+#         return RedirectResponse(url=url)
+#     
+#     if request.url.scheme == "http" and "127.0.0.1" not in request.url.netloc and "localhost" not in request.url.netloc:
+#         url = request.url.replace(scheme="httpshttps")
+#         return RedirectResponse(url=url)
+#     
+#     response = await call_next(request)
+#     return response
 
+# @app.on_event("startup")
 @app.get("/api/auth/captcha")
 async def get_captcha():
     """Generate a new CAPTCHA and return { captcha_id, image_base64 }"""

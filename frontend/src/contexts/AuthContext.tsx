@@ -4,8 +4,8 @@ import { encryptPassword, getPublicKey } from '../utils/encryption';
 
 // Configure axios base URL for API requests
 const API_BASE_URL = process.env.NODE_ENV === 'production' 
-  ? window.location.origin 
-  : 'https://172.24.130.213:8443';
+  ? 'https://kt3.bnu.edu.cn' // 在生产环境下使用绝对路径
+  : ''; // 在开发环境下也使用相对路径，依赖代理
 
 axios.defaults.baseURL = API_BASE_URL;
 
@@ -78,10 +78,16 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           const response = await axios.get('/api/auth/me');
           setUser(response.data);
         } catch (error) {
-          // Token is invalid, remove it
-          localStorage.removeItem('token');
-          setToken(null);
-          setUser(null);
+          // If the error is 401 (Unauthorized) or 403 (Forbidden), the token is invalid.
+          if (axios.isAxiosError(error) && error.response && (error.response.status === 401 || error.response.status === 403)) {
+            // Token is invalid, remove it
+            localStorage.removeItem('token');
+            setToken(null);
+            setUser(null);
+          } else {
+            // For other errors (like network issues), we might not want to clear the token immediately.
+            console.error("Error during auth check:", error);
+          }
         }
       }
       setIsLoading(false);
